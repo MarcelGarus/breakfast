@@ -1,0 +1,5 @@
+add a b =
+  a
+
+main a =
+  add 1 a

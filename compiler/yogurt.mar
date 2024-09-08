@@ -1,0 +1,170 @@
+| Your Official Graph Using Resolved Types  
+
+import kamin.mar
+
+struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
+struct YogurtSignature { str: Str }
+
+struct YogurtFun { params: Slice[Str], body: YogurtBody }
+
+struct YogurtId { int: Int }
+struct YogurtBody { exprs: Slice[YogurtExpr], returns: YogurtId }
+struct YogurtExpr { value: YogurtValue, type: YogurtType }
+
+enum YogurtValue {
+  comptime,
+  param: Str,
+  call: YogurtCall,
+}
+struct YogurtCall { receiver: YogurtId, args: Slice[YogurtId] }
+
+enum YogurtType {
+  comptime_int: Int,
+  int,
+  fun_: Str,
+}
+
+fun yogurt_signature(name: Str, arg_types: Slice[YogurtType]): YogurtSignature {
+  var b = str_builder().&
+  b."{name}"
+  for type in arg_types do b." {type}"
+  YogurtSignature { str = b.to_str() }
+}
+fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
+fun hash(hasher: &Hasher, sig: YogurtSignature) { hasher.hash(sig.str) }
+
+fun write[W](writer: W, yogurt: Yogurt) {
+  var first = true
+  for fun_ in yogurt.funs do {
+    if first then first = false else writer."\n"
+    writer."{fun_.key.str}:"
+    for param in fun_.value.params do writer." {param}"
+    writer."\n{fun_.value.body}"
+  }
+}
+fun write[W](writer: W, signature: YogurtSignature) { writer."{signature.str}" }
+fun write[W](writer: W, id: YogurtId) { writer."@{id.int}" }
+fun write[W](writer: W, body: YogurtBody) {
+  for expr in body.exprs.iter().&.enumerate() do
+    writer."  {YogurtId { int = expr.index }}: 
+      '{expr.item.type} = {expr.item.value}\n"
+  writer."  {body.returns}"
+}
+fun write[W](writer: W, value: YogurtValue) {
+  switch value
+  case comptime writer."comptime"
+  case param(param) writer."param {param}"
+  case call(call) {
+    writer."call {call.receiver}"
+    for arg in call.args do writer." {arg}"
+  }
+}
+fun write[W](writer: W, type: YogurtType) {
+  switch type
+  case int writer."int"
+  case comptime_int(int) writer."{int}"
+  case fun_(fun_) writer."fun {fun_}"
+}
+
+| Convert Egg to Yogurt  
+
+fun to_yogurt(egg: Egg): Yogurt {
+  var main = egg.defs.get_maybe("main") or panic("no main found")
+  var main = main.fun_ or panic("main is not a fun")
+  main.params.len == 1
+    or panic("main takes {main.params.len} params instead of 1")
+  var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
+  main.to_yogurt(vec(YogurtType.int).to_slice(), "main", egg, yogurt.&)
+  yogurt
+}
+fun to_yogurt(
+  fun_: EggFun, args: Slice[YogurtType], name: Str, egg: Egg, yogurt: &Yogurt
+): YogurtFun {
+  var signature = yogurt_signature(name, args)
+  
+  var params = map[Str, YogurtType]()
+  for i in 0..args.len do params.&.put(fun_.params.get(i), args.get(i))
+  var compiler = YogurtFunCompiler {
+    egg, egg_fun = fun_, yogurt, params, body = vec[YogurtExpr](),
+    egg_to_yogurt = map[EggId, YogurtId](),
+  }
+
+  for index in 0..fun_.body.exprs.len do
+    EggId { int = index }.to_yogurt(compiler.&)
+
+  var fun_ = YogurtFun {
+    params = fun_.params,
+    body = YogurtBody {
+      exprs = compiler.body.to_slice(),
+      returns = compiler.egg_to_yogurt.get(fun_.body.returns),
+    }
+  }
+  yogurt.funs.&.put(signature, fun_)
+  fun_
+}
+
+struct YogurtFunCompiler {
+  egg: Egg,
+  egg_fun: EggFun,
+  yogurt: &Yogurt,
+  params: Map[Str, YogurtType],
+  body: Vec[YogurtExpr],
+  egg_to_yogurt: Map[EggId, YogurtId],
+}
+fun push(compiler: &YogurtFunCompiler, expr: YogurtExpr): YogurtId {
+  var id = YogurtId { int = compiler.body.len }
+  compiler.body.&.push(expr)
+  id
+}
+fun get(compiler: YogurtFunCompiler, id: YogurtId): YogurtExpr {
+  compiler.body.get(id.int)
+}
+fun lookup(compiler: YogurtFunCompiler, egg_id: EggId): YogurtId {
+  compiler.egg_to_yogurt.get(egg_id)
+}
+
+fun $(value: YogurtValue, type: YogurtType): _ { YogurtExpr { value, type } }
+
+fun to_yogurt(egg_id: EggId, compiler: &YogurtFunCompiler): YogurtId {
+  var yogurt_id = compiler.egg_fun.body.exprs.get(egg_id.int).to_yogurt(compiler)
+  compiler.egg_to_yogurt.&.put(egg_id, yogurt_id)
+  yogurt_id
+}
+fun to_yogurt(expr: EggExpr, compiler: &YogurtFunCompiler): YogurtId {
+  switch expr
+  case int(int)
+    compiler.push(YogurtValue.comptime $ YogurtType.comptime_int(int))
+  case param(param)
+    compiler.push(YogurtValue.param(param) $ compiler.params.get(param))
+  case global(global) compiler.push(
+    switch compiler.egg.defs.get(global)
+    case value(value) todo()
+    case fun_(fun_) YogurtValue.comptime $ YogurtType.fun_(global)
+  )
+  case call(call) {
+    var receiver = compiler.lookup(call.receiver)
+    var fun_name = {
+      var type = compiler.get(receiver).type
+      type.fun_ or panic("called non-fun (type {type})")
+    }
+    var fun_ = compiler.egg.defs.get(fun_name).fun_
+      or panic("called global variable") | TODO: don't have global variables?
+
+    var args = vec[YogurtId]()
+    var arg_types = vec[YogurtType]()
+    for arg in call.args do {
+      var arg = compiler.lookup(arg)
+      var type = compiler.get(arg).type
+      args.&.push(arg)
+      arg_types.&.push(type)
+    }
+
+    var fun_ = fun_
+      .to_yogurt(arg_types.to_slice(), fun_name, compiler.egg, compiler.yogurt)
+    var return_type = fun_.body.exprs.get(fun_.body.returns.int).type
+    compiler.push(
+      YogurtValue.call(YogurtCall { receiver, args = args.to_slice() })
+        $ return_type
+    )
+  }
+}

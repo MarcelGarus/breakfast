@@ -1,0 +1,157 @@
+| Expression-Guided Graph  
+
+import kamin.mar
+
+struct Egg { defs: Map[Str, EggDef] }
+enum EggDef { value: EggBody, fun_: EggFun }
+struct EggFun { params: Slice[Str], body: EggBody }
+
+struct EggId { int: Int }
+struct EggBody { exprs: Slice[EggExpr], returns: EggId }
+
+enum EggExpr {
+  int: Int,
+  param: Str,
+  global: Str,
+  call: EggCall,
+}
+struct EggCall { receiver: EggId, args: Slice[EggId] }
+
+fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
+fun hash(hasher: &Hasher, id: EggId) { hasher.hash(id.int) }
+
+fun write[W](writer: W, egg: Egg) {
+  var first = true
+  for def in egg.defs do {
+    if first then first = false else writer."\n"
+    writer."{def.key}:"
+    switch def.value
+    case value(body) writer."\n{body}"
+    case fun_(fun_) {
+      for param in fun_.params do writer." {param}"
+      writer."\n{fun_.body}"
+    }
+  }
+}
+fun write[W](writer: W, id: EggId) { writer.":{id.int}" }
+fun write[W](writer: W, body: EggBody) {
+  for expr in body.exprs.iter().&.enumerate() do
+    writer."  :{expr.index} = {expr.item}\n"
+  writer."  {body.returns}"
+}
+fun write[W](writer: W, expr: EggExpr) {
+  switch expr
+  case int(int) writer."int {int}"
+  case param(param) writer."param {param}"
+  case global(global) writer."global {global}"
+  case call(call) {
+    writer."call {call.receiver}"
+    for arg in call.args do writer." {arg}"
+  }
+}
+
+| Variable Scoping  
+| Tracks which names are in scope using a simple vector:
+| - When new names are defined, appends items to the vector.
+| - When names are referenced, walks the vector from the back, searching for the
+|   name. Names that are defined later shadow previously defined names.
+| - When bodies are compiled, save the length of the vector before entering the
+|   body. When exiting the body, trim the vector to that length – all names
+|   defined inside the body automatically go out of scope.
+
+struct Visible { vars: Vec[Tuple2[Str, NameBinding]] }
+enum NameBinding { global: Str, local: EggId }
+fun visible(): _ { Visible { vars = vec[Tuple2[Str, NameBinding]]() } }
+fun define(visible: &Visible, name: Str, value: NameBinding) {
+  visible.vars.&.push(tuple(name, value))
+}
+fun lookup(visible: Visible, name: Str): Maybe[NameBinding] {
+  for binding in visible.vars.to_slice().rev_iter() do
+    if binding.a == name then return some(binding.b)
+  none[NameBinding]()
+}
+struct VisibleSnapshot { vars_len: Int }
+fun snapshot(visible: Visible): _ {
+  VisibleSnapshot { vars_len = visible.vars.len }
+}
+fun restore(visible: &Visible, snapshot: VisibleSnapshot) {
+  visible.vars.len = snapshot.vars_len
+}
+
+| Converting Toast To Egg  
+
+fun to_egg(toast: Toast): Egg {
+  var defs = map[Str, EggDef]()
+  var visible = visible()
+
+  var body = toast.body or panic("Top-level Toast is not a body.")
+
+  visible.&.define("builtin_add", NameBinding.global("@builtin_add"))
+  for toast in body do {
+    var def = toast.def or panic("top-level non-def:\n{toast}")
+    visible.&.define(def.name, NameBinding.global(def.name))
+  }
+  for toast in body do {
+    var def = toast.def.unwrap()
+    var name = def.name
+    var value = def.value.*
+    var snapshot = visible.snapshot()
+    var value =
+      switch value
+      case fun_(fun_) EggDef.fun_(fun_.to_egg(visible.&))
+      default {
+        var body = egg_body_builder().&
+        var body = body.finish(value.to_egg(body, visible.&))
+        EggDef.value(body)
+      }
+    visible.&.restore(snapshot)
+    defs.&.put(name, value)
+  }
+
+  Egg { defs }
+}
+fun to_egg(fun_: ToastFun, visible: &Visible): EggFun {
+  var body = egg_body_builder().&
+  for param in fun_.params do
+    visible.define(param, NameBinding.local(body.push(EggExpr.param(param))))
+  var body = body.finish(fun_.body.to_egg(body, visible))
+  EggFun { params = fun_.params, body }
+}
+
+struct EggBodyBuilder { exprs: Vec[EggExpr] }
+fun egg_body_builder(): _ { EggBodyBuilder { exprs = vec[EggExpr]() } }
+fun finish(builder: EggBodyBuilder, id: EggId): EggBody {
+  EggBody { exprs = builder.exprs.to_slice(), returns = id }
+}
+fun push(builder: &EggBodyBuilder, expr: EggExpr): EggId {
+  var id = EggId { int = builder.exprs.len }
+  builder.exprs.&.push(expr)
+  id
+}
+
+fun to_egg(toast: Toast, body: &EggBodyBuilder, visible: &Visible): EggId {
+  switch toast
+  case int(int) body.push(EggExpr.int(int))
+  case name(name) {
+    switch visible.lookup(name) or panic("unknown referenced name {name}")
+    case global(global) body.push(EggExpr.global(global))
+    case local(local) local
+  }
+  case call(call) {
+    var receiver = call.receiver.to_egg(body, visible)
+    var args = vec[EggId]()
+    for arg in call.args do args.&.push(arg.to_egg(body, visible))
+    body.push(EggExpr.call(EggCall { receiver, args = args.to_slice() }))
+  }
+  case def(def) {
+    var value = def.value.to_egg(body, visible)
+    visible.define(def.name, NameBinding.local(value))
+    value
+  }
+  case fun_(fun_) panic("non-top-level function")
+  case body(exprs) {
+    var last = none[EggId]()
+    for expr in exprs do last = some(expr.to_egg(body, visible))
+    last or panic("empty body")
+  }
+}

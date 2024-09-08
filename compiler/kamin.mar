@@ -1,0 +1,35 @@
+import ../../martinaise/stdlib.mar
+import ilt.mar
+import toast.mar
+import egg.mar
+import yogurt.mar
+
+| Compiler Stages:
+| - Ilt
+| - Toast
+| - Egg
+| - Yogurt
+
+fun main(): Never {
+  println("Hello, world!\n")
+
+  var content = read_file("test.km") or {
+    eprintln("Couldn't read file")
+    exit(1)
+  }
+  var content = content.to_str()
+
+  var ilt = content.to_ilt()
+  println("ILT:\n{ilt}\n")
+  
+  var toast = ilt.to_toast()
+  println("Toast:\n{toast}\n")
+
+  var egg = toast.to_egg()
+  println("Egg:\n{egg}\n")
+
+  var yogurt = egg.to_yogurt()
+  println("Yogurt:\n{yogurt}")
+
+  exit(0)
+}
