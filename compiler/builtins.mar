@@ -1,0 +1,20 @@
+import kamin.mar
+
+enum Builtin {
+  add, sub, mul, div, compare, | int operations
+}
+
+var builtins =
+  vec(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare)
+    .to_slice()
+
+fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
+
+enum Instruction {
+  add, sub, mul, div, compare,
+}
+
+fun write[W](writer: W, instruction: Instruction) {
+  writer."{instruction.debug()}"
+}
+

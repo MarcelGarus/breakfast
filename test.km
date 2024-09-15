@@ -1,10 +1,10 @@
-compare a b = Greater
+compare a b = builtin_compare a b
 
 is_less a b =
   % compare a b
-    Less: Tuple 1 2
-    Equal: Tuple 1 3
-    Greater: None
+    Less: True
+    Equal: False
+    Greater: False
 
 add a b =
   Tuple
@@ -13,6 +13,4 @@ add a b =
     3
 
 main a =
-  % is_less a 1
-    Less: True
-    Greater: False
+  is_less a 1

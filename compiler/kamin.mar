@@ -1,4 +1,5 @@
 import ../../martinaise/stdlib.mar
+import builtins.mar
 import bacon.mar
 import toast.mar
 import egg.mar

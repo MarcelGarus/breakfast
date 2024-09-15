@@ -3,7 +3,7 @@
 import kamin.mar
 
 struct Egg { defs: Map[Str, EggDef] }
-enum EggDef { value: EggFun, fun_: EggFun }
+enum EggDef { value: EggFun, fun_: EggFun, builtin: Builtin }
 struct EggFun { params: Slice[Str], exprs: Slice[EggExpr], body: EggBody }
 struct EggId { int: Int }
 
@@ -39,6 +39,7 @@ fun write[W](writer: W, egg: Egg) {
       writer."\n"
       writer.write(fun_.body, fun_, 1)
     }
+    case builtin(builtin) writer." -"
   }
 }
 fun write[W](writer: W, id: EggId) { writer.":{id.int}" }
@@ -109,7 +110,11 @@ fun to_egg(toast: Toast): Egg {
 
   var body = toast.body or panic("Top-level Toast is not a body.")
 
-  visible.&.define("builtin_add", NameBinding.global("@builtin_add"))
+  for builtin in builtins do {
+    var name = "builtin_{builtin}"
+    visible.&.define(name, NameBinding.global("@{name}"))
+    defs.&.put("@{name}", EggDef.builtin(builtin))
+  }
   for toast in body do {
     var def = toast.def or panic("top-level non-def:\n{toast}")
     visible.&.define(def.name, NameBinding.global(def.name))
