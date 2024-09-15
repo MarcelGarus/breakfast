@@ -1,11 +1,11 @@
 import ../../martinaise/stdlib.mar
-import ilt.mar
+import bacon.mar
 import toast.mar
 import egg.mar
 import yogurt.mar
 
 | Compiler Stages:
-| - Ilt
+| - Bacon
 | - Toast
 | - Egg
 | - Yogurt
@@ -19,10 +19,10 @@ fun main(): Never {
   }
   var content = content.to_str()
 
-  var ilt = content.to_ilt()
-  println("ILT:\n{ilt}\n")
+  var bacon = content.to_bacon()
+  println("Bacon:\n{bacon}\n")
   
-  var toast = ilt.to_toast()
+  var toast = bacon.to_toast()
   println("Toast:\n{toast}\n")
 
   var egg = toast.to_egg()

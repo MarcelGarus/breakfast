@@ -1,12 +1,5 @@
 
-foo: int = 4
-bar: None | Some int =
-  None
-  Some 4
-
-
-not False
-not 4
+foo = 4
 
 not a =
   switch a

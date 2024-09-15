@@ -5,12 +5,16 @@ import kamin.mar
 
 enum Toast {
   int: Int,
+  symbol: Str,
   name: Str,
+  switch_: ToastSwitch,
   call: ToastCall,
   def: ToastDef,
   fun_: ToastFun,
   body: Slice[Toast],
 }
+struct ToastSwitch { condition: &Toast, cases: Slice[ToastCase] }
+struct ToastCase { symbol: Str, body: Toast }
 struct ToastCall { receiver: &Toast, args: Slice[Toast] }
 struct ToastDef { name: Str, value: &Toast }
 struct ToastFun { params: Slice[Str], body: &Toast }
@@ -28,7 +32,18 @@ fun write[W](writer: W, expr: Toast, indentation: Int) {
     for i in 0..indentation do writer."  "
   switch expr
   case int(int) writer."{int}"
+  case symbol(symbol) writer."{symbol}"
   case name(name) writer."{name}"
+  case switch_(switch_) {
+    writer."%\n"
+    writer.write(switch_.condition.*, indentation + 1)
+    for case_ in switch_.cases do {
+      writer."\n"
+      for i in 0..indentation do writer."  "
+      writer."  {case_.symbol}:\n"
+      writer.write(case_.body, indentation + 2)
+    }
+  }
   case call(call) {
     writer."call\n"
     writer.write(call.receiver.*, indentation + 1)
@@ -49,40 +64,54 @@ fun write[W](writer: W, expr: Toast, indentation: Int) {
 }
 
 struct Parser { input: Str, cursor: Int }
+fun current(parser: Parser): Maybe[Char] {
+  parser.input.chars().get_maybe(parser.cursor)
+}
+fun advance(parser: &Parser) { parser.cursor = parser.cursor + 1 }
 fun consume_whitespace(parser: &Parser) {
   loop {
-    var char = parser.input.chars().get_maybe(parser.cursor) or break
-    char.is_whitespace() or break
-    parser.cursor = parser.cursor + 1
+    {parser.current() or break}.is_whitespace() or break
+    parser.advance()
   }
 }
 fun parse_int(parser: &Parser): Maybe[Int] {
   var num = 0
   var start = parser.cursor
   loop {
-    var char = parser.input.chars().get_maybe(parser.cursor) or break
+    var char = parser.current() or break
     char.is_digit() or break
     num = num * 10 + {char - #0}.to_int()
-    parser.cursor = parser.cursor + 1
+    parser.advance()
   }
   if start == parser.cursor then return none[Int]()
   some(num)
 }
-fun parse_name(parser: &Parser): Maybe[Str] {
+fun parse_identifier(parser: &Parser): Maybe[Str] {
   var start = parser.cursor
   loop {
-    var char = parser.input.chars().get_maybe(parser.cursor) or break
+    var char = parser.current() or break
     char.is_letter() or char == #_ or break
-    parser.cursor = parser.cursor + 1
+    parser.advance()
   }
   var end = parser.cursor
   if start == end then return none[Str]()
   some(parser.input.substr(start..end))
 }
+fun parse_name(parser: &Parser): Maybe[Str] {
+  var char = parser.current() or return none[Str]()
+  char.is_lower() or return none[Str]()
+  parser.parse_identifier()
+}
+fun parse_symbol(parser: &Parser): Maybe[Str] {
+  var char = parser.current() or return none[Str]()
+  char.is_upper() or return none[Str]()
+  parser.parse_identifier()
+}
 fun parse_atom(parser: &Parser): Maybe[Toast] {
   parser.consume_whitespace()
   if parser.parse_int() is some(int) then return some(Toast.int(int))
   if parser.parse_name() is some(name) then return some(Toast.name(name))
+  if parser.parse_symbol() is some(symbol) then return some(Toast.symbol(symbol))
   none[Toast]()
 }
 fun parse_expr(parser: &Parser): Maybe[Toast] {
@@ -98,7 +127,7 @@ fun parse_expr(parser: &Parser): Maybe[Toast] {
   parser.consume_whitespace()
   if {parser.input.get_maybe(parser.cursor) or # } == #= then {
     var cursor_at_equals_sign = parser.cursor
-    parser.cursor = parser.cursor + 1
+    parser.advance()
     if parser.parse_expr() is some(value) then
       expr = Toast.def(create_def(expr, value))
     else
@@ -126,14 +155,49 @@ fun create_def(left: Toast, right: Toast): ToastDef {
   default panic("weird definition")
 }
 
-fun to_toast(ilt: Ilt): Toast {
-  if ilt.line.is_empty() then {
+fun to_toast(bacon: Bacon): Toast {
+  if bacon.line.is_empty() then {
     | This is root of the tree; the ILT doesn't contain any other empty lines.
-    return Toast.body(ilt.children.to_toasts())
+    return Toast.body(bacon.children.to_toasts())
   }
-  var parser = Parser { input = ilt.line, cursor = 0 }
+  if bacon.line.starts_with("%") then {
+    | This is a switch.
+    var condition = {
+      var parser = Parser { input = bacon.line.without_first(1), cursor = 0 }
+      var expr = parser.&.parse_expr() or panic("expected switch condition")
+      parser.&.consume_whitespace()
+      parser.cursor == parser.input.len
+        or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+      expr
+    }
+    var cases = vec[ToastCase]()
+    for case_ in bacon.children do {
+      var parser = Parser { input = case_.line, cursor = 0 }
+      var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
+      parser.current() == some(#:) or panic("expected colon")
+      parser.&.advance()
+      parser.&.consume_whitespace()
+      var body =
+        if parser.cursor == parser.input.len then {
+          Toast.body(case_.children.to_toasts())
+        } else {
+          var expr = parser.&.parse_expr() or panic("expected case expression")
+          parser.&.consume_whitespace()
+          parser.cursor == parser.input.len
+            or panic("additional garbage on case line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+          case_.children.is_empty()
+            or panic("case that is neither single- nor multi-line")
+          expr
+        }
+      cases.&.push(ToastCase { symbol, body })
+    }
+    return Toast.switch_(ToastSwitch {
+      condition = condition.put_on_heap(), cases = cases.to_slice()
+    })
+  }
+  var parser = Parser { input = bacon.line, cursor = 0 }
   var expr = parser.&.parse_expr() or panic("expected expression")
-  var children = ilt.children.to_toasts()
+  var children = bacon.children.to_toasts()
   if {parser.input.get_maybe(parser.cursor) or # } == #= then {
     parser.cursor = parser.cursor + 1
     expr = Toast.def(create_def(expr, Toast.body(children)))
@@ -146,8 +210,8 @@ fun to_toast(ilt: Ilt): Toast {
     or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
   expr
 }
-fun to_toasts(ilts: Slice[Ilt]): Slice[Toast] {
+fun to_toasts(bacons: Slice[Bacon]): Slice[Toast] {
   var exprs = vec[Toast]()
-  for ilt in ilts do exprs.&.push(ilt.to_toast())
+  for bacon in bacons do exprs.&.push(bacon.to_toast())
   exprs.to_slice()
 }

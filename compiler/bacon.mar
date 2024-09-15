@@ -1,0 +1,61 @@
+| Blocks Arranged by COlumn Nesting  
+| A tree that contains all the lines of a file, structured by their indentation.
+
+import kamin.mar
+
+struct Bacon {
+  line: Str,
+  children: Slice[Bacon],
+}
+
+fun write[W](writer: W, bacon: Bacon) { writer.write(bacon.children, 0) }
+fun write[W](writer: W, bacon: Bacon, indentation: Int) {
+  for i in 0..indentation do writer."  "
+  writer."{bacon.line}"
+  if bacon.children.is_not_empty() then writer."\n"
+  writer.write(bacon.children, indentation + 1)
+}
+fun write[W](writer: W, bacons: Slice[Bacon], indentation: Int) {
+  var first = true
+  for bacon in bacons do {
+    if first then first = false else writer."\n"
+    writer.write(bacon, indentation)
+  }
+}
+
+struct OngoingBacon {
+  indentation: Int,
+  line: Str,
+  children: Vec[OngoingBacon],
+}
+
+fun to_bacon(bacon: OngoingBacon): Bacon {
+  var children = vec[Bacon]()
+  for child in bacon.children do children.&.push(child.to_bacon())
+  Bacon { line = bacon.line, children = children.to_slice() }
+}
+fun to_bacon(content: Str): Bacon {
+  var root = OngoingBacon {
+    indentation = -1, line = "", children = vec[OngoingBacon]()
+  }
+  for line in content.lines() do {
+    if line.trim().is_empty() then continue
+    var indentation = 0
+    loop {
+      line.chars().get(indentation) == space or break
+      indentation = indentation + 1
+    }
+    var node = root.&
+    loop {
+      var last_child = node.children.&.get_maybe_ref(node.children.len - 1)
+        or break
+      if last_child.indentation >= indentation then break
+      node = last_child
+    }
+    node.children.&.push(OngoingBacon {
+      indentation, line = line.trim(), children = vec[OngoingBacon]()
+    })
+  }
+
+  root.to_bacon()
+}

@@ -5,24 +5,32 @@ import kamin.mar
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: Str }
 
-struct YogurtFun { params: Slice[Str], body: YogurtBody }
-
+struct YogurtFun {
+  params: Slice[Str], exprs: Slice[YogurtExpr], body: YogurtBody
+}
 struct YogurtId { int: Int }
-struct YogurtBody { exprs: Slice[YogurtExpr], returns: YogurtId }
+struct YogurtBody { exprs: Slice[YogurtId], returns: YogurtId }
 struct YogurtExpr { value: YogurtValue, type: YogurtType }
 
 enum YogurtValue {
   comptime,
   param: Str,
+  switch_: YogurtSwitch,
+  tag: YogurtTag,
   call: YogurtCall,
 }
+struct YogurtSwitch { condition: YogurtId, cases: Map[Str, YogurtBody] }
+struct YogurtTag { symbol: Str, args: Slice[YogurtId] }
 struct YogurtCall { receiver: YogurtId, args: Slice[YogurtId] }
 
 enum YogurtType {
   comptime_int: Int,
   int,
+  enum_: Map[Str, Slice[YogurtType]],
   fun_: Str,
 }
+
+fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
 fun yogurt_signature(name: Str, arg_types: Slice[YogurtType]): YogurtSignature {
   var b = str_builder().&
@@ -39,21 +47,40 @@ fun write[W](writer: W, yogurt: Yogurt) {
     if first then first = false else writer."\n"
     writer."{fun_.key.str}:"
     for param in fun_.value.params do writer." {param}"
-    writer."\n{fun_.value.body}"
+    writer."\n"
+    writer.write(fun_.value.body, fun_.value, 1)
   }
 }
 fun write[W](writer: W, signature: YogurtSignature) { writer."{signature.str}" }
 fun write[W](writer: W, id: YogurtId) { writer."@{id.int}" }
-fun write[W](writer: W, body: YogurtBody) {
-  for expr in body.exprs.iter().&.enumerate() do
-    writer."  {YogurtId { int = expr.index }}: 
-      '{expr.item.type} = {expr.item.value}\n"
-  writer."  {body.returns}"
+fun write[W](writer: W, body: YogurtBody, fun_: YogurtFun, indentation: Int) {
+  for id in body.exprs do {
+    var expr = fun_.get(id)
+    for i in 0..indentation do writer."  "
+    writer."{id}: {expr.type} = "
+    writer.write(expr.value, fun_, indentation)
+    writer."\n"
+  }
+  for i in 0..indentation do writer."  "
+  writer."{body.returns}"
 }
-fun write[W](writer: W, value: YogurtValue) {
+fun write[W](writer: W, value: YogurtValue, fun_: YogurtFun, indentation: Int) {
   switch value
   case comptime writer."comptime"
   case param(param) writer."param {param}"
+  case switch_(switch_) {
+    writer."switch {switch_.condition}"
+    for case_ in switch_.cases do {
+      writer."\n"
+      for i in 0..indentation do writer."  "
+      writer."  {case_.key}:\n"
+      writer.write(case_.value, fun_, indentation + 2)
+    }
+  }
+  case tag(tag) {
+    writer."tag {tag.symbol}"
+    for arg in tag.args do writer." {arg}"
+  }
   case call(call) {
     writer."call {call.receiver}"
     for arg in call.args do writer." {arg}"
@@ -63,6 +90,14 @@ fun write[W](writer: W, type: YogurtType) {
   switch type
   case int writer."int"
   case comptime_int(int) writer."{int}"
+  case enum_(variants) {
+    var first = true
+    for variant in variants do {
+      if first then first = false else writer." | "
+      writer."{variant.key}"
+      for arg in variant.value do writer." {arg}"
+    }
+  }
   case fun_(fun_) writer."fun {fun_}"
 }
 
@@ -85,19 +120,17 @@ fun to_yogurt(
   var params = map[Str, YogurtType]()
   for i in 0..args.len do params.&.put(fun_.params.get(i), args.get(i))
   var compiler = YogurtFunCompiler {
-    egg, egg_fun = fun_, yogurt, params, body = vec[YogurtExpr](),
+    egg, egg_fun = fun_, yogurt, params, exprs = vec[YogurtExpr](),
     egg_to_yogurt = map[EggId, YogurtId](),
   }
+  var body = compiler.&.body()
 
-  for index in 0..fun_.body.exprs.len do
-    EggId { int = index }.to_yogurt(compiler.&)
+  for id in fun_.body.exprs do id.to_yogurt(body.&)
 
   var fun_ = YogurtFun {
     params = fun_.params,
-    body = YogurtBody {
-      exprs = compiler.body.to_slice(),
-      returns = compiler.egg_to_yogurt.get(fun_.body.returns),
-    }
+    exprs = compiler.exprs.to_slice(),
+    body = body.finish(fun_.body.returns),
   }
   yogurt.funs.&.put(signature, fun_)
   fun_
@@ -108,47 +141,75 @@ struct YogurtFunCompiler {
   egg_fun: EggFun,
   yogurt: &Yogurt,
   params: Map[Str, YogurtType],
-  body: Vec[YogurtExpr],
+  exprs: Vec[YogurtExpr],
   egg_to_yogurt: Map[EggId, YogurtId],
 }
-fun push(compiler: &YogurtFunCompiler, expr: YogurtExpr): YogurtId {
-  var id = YogurtId { int = compiler.body.len }
-  compiler.body.&.push(expr)
+struct YogurtBodyCompiler {
+  parent: &YogurtFunCompiler,
+  exprs: Vec[YogurtId],
+}
+
+fun body(parent: &YogurtFunCompiler): YogurtBodyCompiler {
+  YogurtBodyCompiler { parent, exprs = vec[YogurtId]() }
+}
+fun push(compiler: &YogurtBodyCompiler, expr: YogurtExpr): YogurtId {
+  var id = YogurtId { int = compiler.parent.exprs.len }
+  compiler.parent.exprs.&.push(expr)
+  compiler.exprs.&.push(id)
   id
 }
-fun get(compiler: YogurtFunCompiler, id: YogurtId): YogurtExpr {
-  compiler.body.get(id.int)
+fun get(compiler: YogurtBodyCompiler, id: YogurtId): YogurtExpr {
+  compiler.parent.exprs.get(id.int)
 }
-fun lookup(compiler: YogurtFunCompiler, egg_id: EggId): YogurtId {
-  compiler.egg_to_yogurt.get(egg_id)
+fun lookup(compiler: YogurtBodyCompiler, egg_id: EggId): YogurtId {
+  compiler.parent.egg_to_yogurt.get(egg_id)
+}
+fun finish(compiler: YogurtBodyCompiler, id: EggId): YogurtBody {
+  YogurtBody {
+    exprs = compiler.exprs.to_slice(),
+    returns = compiler.parent.egg_to_yogurt.get(id),
+  }
 }
 
 fun $(value: YogurtValue, type: YogurtType): _ { YogurtExpr { value, type } }
 
-fun to_yogurt(egg_id: EggId, compiler: &YogurtFunCompiler): YogurtId {
-  var yogurt_id = compiler.egg_fun.body.exprs.get(egg_id.int).to_yogurt(compiler)
-  compiler.egg_to_yogurt.&.put(egg_id, yogurt_id)
+fun to_yogurt(egg_id: EggId, compiler: &YogurtBodyCompiler): YogurtId {
+  var yogurt_id = compiler.parent.egg_fun.get(egg_id).to_yogurt(compiler)
+  compiler.parent.egg_to_yogurt.&.put(egg_id, yogurt_id)
   yogurt_id
 }
-fun to_yogurt(expr: EggExpr, compiler: &YogurtFunCompiler): YogurtId {
+fun to_yogurt(expr: EggExpr, compiler: &YogurtBodyCompiler): YogurtId {
   switch expr
   case int(int)
     compiler.push(YogurtValue.comptime $ YogurtType.comptime_int(int))
+  case symbol(symbol)
+    compiler.push(YogurtValue.comptime
+      $ YogurtType.enum_(map(symbol -> empty_slice[YogurtType]())))
   case param(param)
-    compiler.push(YogurtValue.param(param) $ compiler.params.get(param))
+    compiler.push(YogurtValue.param(param) $ compiler.parent.params.get(param))
   case global(global) compiler.push(
-    switch compiler.egg.defs.get(global)
+    switch compiler.parent.egg.defs.get(global)
     case value(value) todo()
     case fun_(fun_) YogurtValue.comptime $ YogurtType.fun_(global)
   )
+  case switch_(switch_) {
+    var condition = compiler.lookup(switch_.condition)
+    var cases = map[Str, YogurtBody]()
+    var case_types = vec[YogurtType]()
+    for case_ in switch_.cases do {
+      var case_compiler = compiler.parent.&.body()
+      for id in case_.value.exprs do id.to_yogurt(case_compiler.&)
+      var body = case_compiler.finish(case_.value.returns)
+      cases.&.put(case_.key, body)
+      case_types.&.push(compiler.get(body.returns).type)
+    }
+    var type = join(case_types.to_slice())
+      or panic("Couldn't join types {case_types}")
+    compiler.push(
+      YogurtValue.switch_(YogurtSwitch { condition, cases }) $ type)
+  }
   case call(call) {
     var receiver = compiler.lookup(call.receiver)
-    var fun_name = {
-      var type = compiler.get(receiver).type
-      type.fun_ or panic("called non-fun (type {type})")
-    }
-    var fun_ = compiler.egg.defs.get(fun_name).fun_
-      or panic("called global variable") | TODO: don't have global variables?
 
     var args = vec[YogurtId]()
     var arg_types = vec[YogurtType]()
@@ -158,13 +219,78 @@ fun to_yogurt(expr: EggExpr, compiler: &YogurtFunCompiler): YogurtId {
       args.&.push(arg)
       arg_types.&.push(type)
     }
+    var args = args.to_slice()
+    var arg_types = arg_types.to_slice()
 
-    var fun_ = fun_
-      .to_yogurt(arg_types.to_slice(), fun_name, compiler.egg, compiler.yogurt)
-    var return_type = fun_.body.exprs.get(fun_.body.returns.int).type
-    compiler.push(
-      YogurtValue.call(YogurtCall { receiver, args = args.to_slice() })
-        $ return_type
-    )
+    switch compiler.get(receiver).type
+    case enum_(variants) {
+      variants.size == 1 or panic("called enum with {variants.size} variants")
+      var variant = variants.iter().&.next().unwrap()
+      variant.value.is_empty() or panic("called symbol that already has values")
+      var symbol = variant.key
+      compiler.push(
+        YogurtValue.tag(YogurtTag { symbol, args })
+          $ YogurtType.enum_(map(symbol -> arg_types))
+      )
+    }
+    case fun_(fun_name) {
+      var fun_ = compiler.parent.egg.defs.get(fun_name).fun_
+        or panic("called global variable") | TODO: don't have global variables?
+
+      var fun_ = fun_
+        .to_yogurt(arg_types, fun_name, compiler.parent.egg,
+          compiler.parent.yogurt)
+      var return_type = fun_.exprs.get(fun_.body.returns.int).type
+      compiler.push(
+        YogurtValue.call(YogurtCall { receiver, args })
+          $ return_type
+      )
+    }
+    default panic("called {compiler.get(receiver).type}")
+  }
+}
+
+fun join(types: Slice[YogurtType]): Maybe[YogurtType] {
+  var common = types.get(0)
+  for type in types.without_first() do
+    common = join(common, type) or return none[YogurtType]()
+  some(common)
+}
+fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
+  switch a
+  case comptime_int(a_int) {
+    switch b
+    case comptime_int(b_int) some(if a_int == b_int then a else YogurtType.int)
+    case int some(YogurtType.int)
+    default none[YogurtType]()
+  }
+  case int {
+    switch b
+    case comptime_int some(YogurtType.int)
+    case int some(YogurtType.int)
+    default none[YogurtType]()
+  }
+  case enum_(a_variants) {
+    switch b
+    case enum_(b_variants) {
+      var variants = map[Str, Slice[YogurtType]]()
+      for variant in a_variants do variants.&.put(variant.key, variant.value)
+      for variant in b_variants do {
+        if variants.get_maybe(variant.key) is some(a_args) then {
+          var args = vec[YogurtType]()
+          for both in zip(a_args.iter(), variant.value.iter()) do
+            args.&.push(join(both.a, both.b) or return none[YogurtType]())
+          variants.&.put(variant.key, args.to_slice())
+        } else
+          variants.&.put(variant.key, variant.value)
+      }
+      some(YogurtType.enum_(variants))
+    }
+    default none[YogurtType]()
+  }
+  case fun_(a_fun) {
+    switch b
+    case fun_(b_fun) if a_fun == b_fun then some(a) else none[YogurtType]()
+    default none[YogurtType]()
   }
 }
