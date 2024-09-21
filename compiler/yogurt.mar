@@ -1,6 +1,6 @@
 | Your Official Graph Using Resolved Types  
 
-import kamin.mar
+import breakfast.mar
 
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: Str }

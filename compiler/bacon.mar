@@ -1,7 +1,7 @@
 | Blocks Arranged by COlumn Nesting  
 | A tree that contains all the lines of a file, structured by their indentation.
 
-import kamin.mar
+import breakfast.mar
 
 struct Bacon {
   line: Str,
