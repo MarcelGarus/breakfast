@@ -15,7 +15,7 @@ enum Toast {
   body: Slice[Toast],
 }
 struct ToastSwitch { condition: &Toast, cases: Slice[ToastCase] }
-struct ToastCase { symbol: Str, body: Toast }
+struct ToastCase { symbol: Str, params: Slice[Str], body: Toast }
 struct ToastCall { receiver: &Toast, args: Slice[Toast] }
 struct ToastDef { name: Str, value: &Toast }
 struct ToastFun { params: Slice[Str], body: &Toast }
@@ -192,6 +192,11 @@ fun to_toast(bacon: Bacon): Toast {
     for case_ in bacon.children do {
       var parser = Parser { input = case_.line, cursor = 0 }
       var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
+      var params = vec[Str]()
+      loop {
+        parser.&.consume_whitespace()
+        params.&.push(parser.&.parse_name() or break)
+      }
       parser.current() == some(#:) or panic("expected colon")
       parser.&.advance()
       parser.&.consume_whitespace()
@@ -207,7 +212,7 @@ fun to_toast(bacon: Bacon): Toast {
             or panic("case that is neither single- nor multi-line")
           expr
         }
-      cases.&.push(ToastCase { symbol, body })
+      cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
     }
     return Toast.switch_(ToastSwitch {
       condition = condition.put_on_heap(), cases = cases.to_slice()

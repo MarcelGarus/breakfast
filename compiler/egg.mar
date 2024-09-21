@@ -4,15 +4,15 @@ import breakfast.mar
 
 struct Egg { defs: Map[Str, EggDef] }
 enum EggDef { value: EggFun, fun_: EggFun, builtin: Builtin }
-struct EggFun { params: Slice[Str], exprs: Slice[EggExpr], body: EggBody }
+struct EggFun { exprs: Slice[EggExpr], body: EggBody }
 struct EggId { int: Int }
 
-struct EggBody { exprs: Slice[EggId], returns: EggId }
+struct EggBody { params: Slice[EggId], exprs: Slice[EggId], returns: EggId }
 enum EggExpr {
+  param,
   int: Int,
   string: Str,
   symbol: Str,
-  param: Str,
   global: Str,
   switch_: EggSwitch,
   call: EggCall,
@@ -31,20 +31,15 @@ fun write[W](writer: W, egg: Egg) {
     if first then first = false else writer."\n"
     writer."{def.key}:"
     switch def.value
-    case value(fun_) {
-      writer."\n"
-      writer.write(fun_.body, fun_, 1)
-    }
-    case fun_(fun_) {
-      for param in fun_.params do writer." {param}"
-      writer."\n"
-      writer.write(fun_.body, fun_, 1)
-    }
+    case value(fun_) writer.write(fun_.body, fun_, 1)
+    case fun_(fun_) writer.write(fun_.body, fun_, 1)
     case builtin(builtin) writer." -"
   }
 }
 fun write[W](writer: W, id: EggId) { writer.":{id.int}" }
 fun write[W](writer: W, body: EggBody, fun_: EggFun, indentation: Int) {
+  for param in body.params do writer." {param}"
+  writer."\n"
   for id in body.exprs do {
     for i in 0..indentation do writer."  "
     writer."{id} = "
@@ -66,7 +61,7 @@ fun write[W](writer: W, expr: EggExpr, fun_: EggFun, indentation: Int) {
     for case_ in switch_.cases do {
       writer."\n"
       for i in 0..indentation do writer."  "
-      writer."  {case_.key}:\n"
+      writer."  {case_.key}:"
       writer.write(case_.value, fun_, indentation + 2)
     }
   }
@@ -132,10 +127,10 @@ fun to_egg(toast: Toast): Egg {
         var compiler = egg_fun_compiler().&
         var body = compiler.egg_body_compiler().&
         for param in fun_.params do
-          visible.&.define(param, NameBinding.local(body.push(EggExpr.param(param))))
+          visible.&.define(param, NameBinding.local(body.push_param()))
         var body = body.finish(fun_.body.to_egg(body, visible.&))
         EggDef.fun_(EggFun {
-          params = fun_.params, exprs = compiler.exprs.to_slice(), body
+          exprs = compiler.exprs.to_slice(), body
         })
       }
       default {
@@ -143,7 +138,7 @@ fun to_egg(toast: Toast): Egg {
         var body = compiler.egg_body_compiler().&
         var body = body.finish(value.to_egg(body, visible.&))
         EggDef.value(EggFun {
-          params = empty_slice[Str](), exprs = compiler.exprs.to_slice(), body
+          exprs = compiler.exprs.to_slice(), body
         })
       }
     visible.&.restore(snapshot)
@@ -154,13 +149,23 @@ fun to_egg(toast: Toast): Egg {
 }
 
 struct EggFunCompiler { exprs: Vec[EggExpr] }
-struct EggBodyCompiler { parent: &EggFunCompiler, exprs: Vec[EggId] }
+struct EggBodyCompiler {
+  parent: &EggFunCompiler, params: Vec[EggId], exprs: Vec[EggId]
+}
 fun egg_fun_compiler(): _ { EggFunCompiler { exprs = vec[EggExpr]() } }
 fun egg_body_compiler(parent: &EggFunCompiler): _ {
-  EggBodyCompiler { parent, exprs = vec[EggId]() }
+  EggBodyCompiler { parent, params = vec[EggId](), exprs = vec[EggId]() }
 }
 fun finish(body: EggBodyCompiler, id: EggId): EggBody {
-  EggBody { exprs = body.exprs.to_slice(), returns = id }
+  EggBody {
+    params = body.params.to_slice(), exprs = body.exprs.to_slice(), returns = id
+  }
+}
+fun push_param(body: &EggBodyCompiler): EggId {
+  var id = EggId { int = body.parent.exprs.len }
+  body.parent.exprs.&.push(EggExpr.param)
+  body.params.&.push(id)
+  id
 }
 fun push(body: &EggBodyCompiler, expr: EggExpr): EggId {
   var id = EggId { int = body.parent.exprs.len }
@@ -183,8 +188,13 @@ fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
     var condition = switch_.condition.to_egg(body, visible)
     var cases = map[Str, EggBody]()
     for case_ in switch_.cases do {
+      var snapshot = visible.snapshot()
       var case_body = body.parent.egg_body_compiler().&
-      var case_body = case_body.finish(case_.body.to_egg(case_body, visible))
+      for param in case_.params do
+        visible.define(param, NameBinding.local(case_body.push_param()))
+      var returns = case_.body.to_egg(case_body, visible)
+      var case_body = case_body.finish(returns)
+      visible.restore(snapshot)
       cases.&.put(case_.symbol, case_body)
     }
     body.push(EggExpr.switch_(EggSwitch { condition, cases }))
