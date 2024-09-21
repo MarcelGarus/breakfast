@@ -1,7 +1,7 @@
 | Totally Okay Abstract Syntax Tree  
 | Tree that represents the syntactical language constructs.
 
-import kamin.mar
+import breakfast.mar
 
 enum Toast {
   int: Int,

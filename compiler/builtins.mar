@@ -1,4 +1,4 @@
-import kamin.mar
+import breakfast.mar
 
 enum Builtin {
   add, sub, mul, div, compare, | int operations

@@ -1,6 +1,6 @@
 | Expression-Guided Graph  
 
-import kamin.mar
+import breakfast.mar
 
 struct Egg { defs: Map[Str, EggDef] }
 enum EggDef { value: EggFun, fun_: EggFun, builtin: Builtin }
