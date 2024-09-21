@@ -13,4 +13,5 @@ add a b =
     3
 
 main a =
+  builtin_add 2 3
   is_less a 1

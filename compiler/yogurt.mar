@@ -248,11 +248,17 @@ fun to_yogurt(expr: EggExpr, compiler: &YogurtBodyCompiler): YogurtId {
       var return_type =
         switch compiler.parent.egg.defs.get(fun_name)
         case fun_(fun_) {
+          fun_.params.len == args.len or
+            panic("called {fun_name} with {args.len} arguments, but it expects 
+              '{fun_.params.len} parameters")
           var fun_ = fun_.to_yogurt(arg_types, fun_name, compiler.parent.egg,
             compiler.parent.yogurt)
           fun_.exprs.get(fun_.body.returns.int).type
         }
         case builtin(builtin) {
+          builtin.num_params() == args.len or
+            panic("called {fun_name} with {args.len} arguments, but it expects 
+              '{builtin.num_params()} parameters")
           var fun_ = builtin.to_yogurt(arg_types, compiler.parent.egg,
             compiler.parent.yogurt)
           fun_.exprs.get(fun_.body.returns.int).type
@@ -292,15 +298,53 @@ fun to_yogurt(
     args.&.push(body.&.push(YogurtValue.param("arg_{i}") $ arg_types.get(i)))
   var args = args.to_slice()
 
+  var returns = builtin.to_yogurt(body.&, args, arg_types)
+
+  var fun_ = YogurtFun {
+    params = {
+      var vec = vec[Str]()
+      for i in 0..arg_types.len do vec.&.push("arg_{i}")
+      vec.to_slice()
+    },
+    exprs = body.exprs.to_slice(),
+    body = YogurtBody { exprs = body.body.to_slice(), returns }
+  }
+  yogurt.funs.&.put(signature, fun_)
+  fun_
+}
+fun to_yogurt(
+  builtin: Builtin, body: &YogurtBodyBuilder,
+  args: Slice[YogurtId], arg_types: Slice[YogurtType],
+): YogurtId {
   switch builtin
   case add {
-    arg_types.len == 2 or panic("builtin_add called with {arg_types.len} args")
+    var a_type = arg_types.get(0)
+    var b_type = arg_types.get(1)
+    if a_type is comptime_int(a) then if b_type is comptime_int(b) then {
+      return body.&.push(YogurtValue.comptime $ YogurtType.comptime_int(a + b))
+    }
+    a_type.is_inty() or panic("called add with non-int")
+    b_type.is_inty() or panic("called add with non-int")
     body.&.push(YogurtValue.instruction(YogurtInstruction {
       instruction = Instruction.add, args
     }) $ YogurtType.int)
   }
   case compare {
-    arg_types.len == 2 or panic("builtin_compare called with {arg_types.len} args")
+    var a_type = arg_types.get(0)
+    var b_type = arg_types.get(1)
+    if a_type is comptime_int(a) then if b_type is comptime_int(b) then {
+      var symbol =
+        switch a <=> b
+        case less "Less"
+        case equal "Equal"
+        case greater "Greater"
+      return body.&.push(
+        YogurtValue.comptime
+          $ YogurtType.enum_(map(symbol -> empty_slice[YogurtType]()))
+      )
+    }
+    a_type.is_inty() or panic("called compare with non-int")
+    b_type.is_inty() or panic("called compare with non-int")
     body.&.push(
       YogurtValue.instruction(YogurtInstruction {
         instruction = Instruction.compare, args
@@ -312,7 +356,7 @@ fun to_yogurt(
     )
   }
   case crash {
-    arg_types.len == 1 or panic("builtin_crash called with {arg_types.len} args")
+    | TODO: check it's a string
     body.&.push(
       YogurtValue.instruction(YogurtInstruction {
         instruction = Instruction.crash, args
@@ -320,22 +364,9 @@ fun to_yogurt(
     )
   }
   default todo("implement builtin {builtin}")
-
-  var fun_ = YogurtFun {
-    params = {
-      var vec = vec[Str]()
-      for i in 0..arg_types.len do vec.&.push("arg_{i}")
-      vec.to_slice()
-    },
-    exprs = body.exprs.to_slice(),
-    body = YogurtBody {
-      exprs = body.body.to_slice(),
-      returns = YogurtId { int = body.exprs.len - 1 },
-    }
-  }
-  yogurt.funs.&.put(signature, fun_)
-  fun_
 }
+
+fun is_inty(type: YogurtType): Bool { {type is comptime_int} or {type is int} }
 
 fun join(types: Slice[YogurtType]): Maybe[YogurtType] {
   var common = types.get(0)

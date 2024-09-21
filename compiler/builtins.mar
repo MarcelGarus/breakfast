@@ -12,6 +12,16 @@ var builtins =
 
 fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
 
+fun num_params(builtin: Builtin): Int {
+  switch builtin
+  case add 2
+  case sub 2
+  case mul 2
+  case div 2
+  case compare 2
+  case crash 1
+}
+
 enum Instruction {
   add, sub, mul, div, compare,
   crash,
