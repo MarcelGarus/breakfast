@@ -2,16 +2,19 @@ import breakfast.mar
 
 enum Builtin {
   add, sub, mul, div, compare, | int operations
+  crash,
 }
 
 var builtins =
-  vec(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare)
+  vec(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare,
+    Builtin.crash)
     .to_slice()
 
 fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
 
 enum Instruction {
   add, sub, mul, div, compare,
+  crash,
 }
 
 fun write[W](writer: W, instruction: Instruction) {

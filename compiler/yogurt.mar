@@ -30,6 +30,7 @@ enum YogurtType {
   int,
   enum_: Map[Str, Slice[YogurtType]],
   fun_: Str,
+  never,
 }
 
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
@@ -105,6 +106,7 @@ fun write[W](writer: W, type: YogurtType) {
     }
   }
   case fun_(fun_) writer."fun {fun_}"
+  case never writer."never"
 }
 
 | Convert Egg to Yogurt  
@@ -309,6 +311,14 @@ fun to_yogurt(
       ))
     )
   }
+  case crash {
+    arg_types.len == 1 or panic("builtin_crash called with {arg_types.len} args")
+    body.&.push(
+      YogurtValue.instruction(YogurtInstruction {
+        instruction = Instruction.crash, args
+      }) $ YogurtType.never
+    )
+  }
   default todo("implement builtin {builtin}")
 
   var fun_ = YogurtFun {
@@ -334,6 +344,9 @@ fun join(types: Slice[YogurtType]): Maybe[YogurtType] {
   some(common)
 }
 fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
+  if a is never then return some(b)
+  if b is never then return some(a)
+
   switch a
   case comptime_int(a_int) {
     switch b
@@ -370,4 +383,5 @@ fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
     case fun_(b_fun) if a_fun == b_fun then some(a) else none[YogurtType]()
     default none[YogurtType]()
   }
+  case never unreachable()
 }
