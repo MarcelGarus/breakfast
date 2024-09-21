@@ -13,3 +13,38 @@ format value =
     Int: ...
     Struct fields:
       ...
+
+
+is_inty type =
+  info = type_info type
+  % info
+    ComptimeInt _: True
+    Int: True
+    _: False
+
+is_stringy type =
+  info = type_info type
+  % info
+    ComptimeString _: True
+    String: True
+    _: False
+
++ a b =
+  type_a = type_of a
+  type_b = type_of b
+  %
+    and
+      is_stringy type_a
+      is_stringy type_b
+    True: std.string.concat a b
+    False:
+
+
+  info = type_info type
+  % info
+    ComptimeInt int: ...
+    Int:
+    ComptimeString:
+    String:
+    Enum variant:
+

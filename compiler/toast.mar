@@ -5,6 +5,7 @@ import breakfast.mar
 
 enum Toast {
   int: Int,
+  string: Str,
   symbol: Str,
   name: Str,
   switch_: ToastSwitch,
@@ -32,6 +33,7 @@ fun write[W](writer: W, expr: Toast, indentation: Int) {
     for i in 0..indentation do writer."  "
   switch expr
   case int(int) writer."{int}"
+  case string(str) writer."\"{str}\""
   case symbol(symbol) writer."{symbol}"
   case name(name) writer."{name}"
   case switch_(switch_) {
@@ -86,11 +88,26 @@ fun parse_int(parser: &Parser): Maybe[Int] {
   if start == parser.cursor then return none[Int]()
   some(num)
 }
+fun parse_string(parser: &Parser): Maybe[Str] {
+  var char = parser.current() or return none[Str]()
+  char == #" or return none[Str]()
+  parser.advance()
+  var start = parser.cursor
+  loop {
+    var char = parser.current() or panic("string doesn't end until end of input")
+    if char == #" then break
+    parser.advance()
+  }
+  var end = parser.cursor
+  parser.advance() | consume the "
+  some(parser.input.substr(start..end))
+}
+var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/"
 fun parse_identifier(parser: &Parser): Maybe[Str] {
   var start = parser.cursor
   loop {
     var char = parser.current() or break
-    char.is_letter() or char == #_ or break
+    identifier_chars.iter().&.contains(char) or break
     parser.advance()
   }
   var end = parser.cursor
@@ -99,7 +116,7 @@ fun parse_identifier(parser: &Parser): Maybe[Str] {
 }
 fun parse_name(parser: &Parser): Maybe[Str] {
   var char = parser.current() or return none[Str]()
-  char.is_lower() or return none[Str]()
+  not(char.is_upper()) or return none[Str]()
   parser.parse_identifier()
 }
 fun parse_symbol(parser: &Parser): Maybe[Str] {
@@ -110,6 +127,7 @@ fun parse_symbol(parser: &Parser): Maybe[Str] {
 fun parse_atom(parser: &Parser): Maybe[Toast] {
   parser.consume_whitespace()
   if parser.parse_int() is some(int) then return some(Toast.int(int))
+  if parser.parse_string() is some(str) then return some(Toast.string(str))
   if parser.parse_name() is some(name) then return some(Toast.name(name))
   if parser.parse_symbol() is some(symbol) then return some(Toast.symbol(symbol))
   none[Toast]()
@@ -167,7 +185,7 @@ fun to_toast(bacon: Bacon): Toast {
       var expr = parser.&.parse_expr() or panic("expected switch condition")
       parser.&.consume_whitespace()
       parser.cursor == parser.input.len
-        or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+        or panic("additional garbage on switch condition line: {parser.input} cursor = {parser.cursor..parser.input.len}")
       expr
     }
     var cases = vec[ToastCase]()
@@ -207,7 +225,7 @@ fun to_toast(bacon: Bacon): Toast {
     })
   parser.&.consume_whitespace()
   parser.cursor == parser.input.len
-    or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+    or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}, expr = {expr.debug()}")
   expr
 }
 fun to_toasts(bacons: Slice[Bacon]): Slice[Toast] {

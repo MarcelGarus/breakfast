@@ -2,12 +2,15 @@ import breakfast.mar
 
 enum Builtin {
   add, sub, mul, div, compare, | int operations
+  concat, | string operations
+  type_info, | type operations
   crash,
 }
 
 var builtins =
   vec(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare,
-    Builtin.crash)
+    Builtin.concat,
+    Builtin.type_info, Builtin.crash)
     .to_slice()
 
 fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
@@ -19,11 +22,14 @@ fun num_params(builtin: Builtin): Int {
   case mul 2
   case div 2
   case compare 2
+  case concat 2
+  case type_info 1
   case crash 1
 }
 
 enum Instruction {
   add, sub, mul, div, compare,
+  concat,
   crash,
 }
 

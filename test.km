@@ -1,4 +1,6 @@
 compare a b = builtin_compare a b
+type_info type = builtin_type_info type
+crash message = builtin_crash message
 
 is_less a b =
   % compare a b
@@ -12,6 +14,23 @@ add a b =
     2
     3
 
++ a b =
+  % type_info a
+    ComptimeInt: builtin_add a b
+    Int: builtin_add a b
+    ComptimeString: builtin_concat a b
+    String: builtin_concat a b
+    Enum: crash "Tried to add weird types together."
+
+format value =
+  % type_info value
+    ComptimeInt: "<a comptime int>"
+    Int: "<an int>"
+    ComptimeString: value
+    String: value
+    Enum: "<other>"
+
 main a =
-  builtin_add 2 3
-  is_less a 1
+  + 2 1
+  + "Hi" ", world!"
+  + Foo Bar

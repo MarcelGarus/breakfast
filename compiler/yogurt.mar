@@ -28,6 +28,8 @@ struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 enum YogurtType {
   comptime_int: Int,
   int,
+  comptime_string: Str,
+  string,
   enum_: Map[Str, Slice[YogurtType]],
   fun_: Str,
   never,
@@ -95,8 +97,10 @@ fun write[W](writer: W, value: YogurtValue, fun_: YogurtFun, indentation: Int) {
 }
 fun write[W](writer: W, type: YogurtType) {
   switch type
-  case int writer."int"
   case comptime_int(int) writer."{int}"
+  case int writer."int"
+  case comptime_string(string) writer."{string.debug()}"
+  case string writer."string"
   case enum_(variants) {
     var first = true
     for variant in variants do {
@@ -190,6 +194,8 @@ fun to_yogurt(expr: EggExpr, compiler: &YogurtBodyCompiler): YogurtId {
   switch expr
   case int(int)
     compiler.push(YogurtValue.comptime $ YogurtType.comptime_int(int))
+  case string(string)
+    compiler.push(YogurtValue.comptime $ YogurtType.comptime_string(string))
   case symbol(symbol)
     compiler.push(YogurtValue.comptime
       $ YogurtType.enum_(map(symbol -> empty_slice[YogurtType]())))
@@ -355,6 +361,34 @@ fun to_yogurt(
       ))
     )
   }
+  case concat {
+    var a_type = arg_types.get(0)
+    var b_type = arg_types.get(1)
+    if a_type is comptime_string(a) then if b_type is comptime_string(b) then {
+      return body.&.push(YogurtValue.comptime $ YogurtType.comptime_string("{a}{b}"))
+    }
+    a_type.is_stringy() or panic("called concat with non-string")
+    b_type.is_stringy() or panic("called concat with non-string")
+    body.&.push(YogurtValue.instruction(YogurtInstruction {
+      instruction = Instruction.concat, args
+    }) $ YogurtType.string)
+  }
+  case type_info {
+    var type = arg_types.get(0)
+    var symbol =
+      switch type
+      case comptime_int "ComptimeInt"
+      case int "Int"
+      case comptime_string "ComptimeString"
+      case string "String"
+      case enum_ "Enum"
+      case fun_ "Fun"
+      case never "Never"
+    body.&.push(
+      YogurtValue.comptime
+        $ YogurtType.enum_(map(symbol -> empty_slice[YogurtType]()))
+    )
+  }
   case crash {
     | TODO: check it's a string
     body.&.push(
@@ -367,6 +401,7 @@ fun to_yogurt(
 }
 
 fun is_inty(type: YogurtType): Bool { {type is comptime_int} or {type is int} }
+fun is_stringy(type: YogurtType): Bool { {type is comptime_string} or {type is string} }
 
 fun join(types: Slice[YogurtType]): Maybe[YogurtType] {
   var common = types.get(0)
@@ -389,6 +424,19 @@ fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
     switch b
     case comptime_int some(YogurtType.int)
     case int some(YogurtType.int)
+    default none[YogurtType]()
+  }
+  case comptime_string(a_string) {
+    switch b
+    case comptime_string(b_string)
+      some(if a_string == b_string then a else YogurtType.string)
+    case string some(YogurtType.string)
+    default none[YogurtType]()
+  }
+  case string {
+    switch b
+    case comptime_string some(YogurtType.string)
+    case string some(YogurtType.string)
     default none[YogurtType]()
   }
   case enum_(a_variants) {

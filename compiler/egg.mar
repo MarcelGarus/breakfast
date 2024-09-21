@@ -10,6 +10,7 @@ struct EggId { int: Int }
 struct EggBody { exprs: Slice[EggId], returns: EggId }
 enum EggExpr {
   int: Int,
+  string: Str,
   symbol: Str,
   param: Str,
   global: Str,
@@ -56,6 +57,7 @@ fun write[W](writer: W, body: EggBody, fun_: EggFun, indentation: Int) {
 fun write[W](writer: W, expr: EggExpr, fun_: EggFun, indentation: Int) {
   switch expr
   case int(int) writer."int {int}"
+  case string(string) writer."string {string.debug()}"
   case symbol(symbol) writer."symbol {symbol}"
   case param(param) writer."param {param}"
   case global(global) writer."global {global}"
@@ -170,6 +172,7 @@ fun push(body: &EggBodyCompiler, expr: EggExpr): EggId {
 fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
   switch toast
   case int(int) body.push(EggExpr.int(int))
+  case string(str) body.push(EggExpr.string(str))
   case symbol(symbol) body.push(EggExpr.symbol(symbol))
   case name(name) {
     switch visible.lookup(name) or panic("unknown referenced name {name}")
