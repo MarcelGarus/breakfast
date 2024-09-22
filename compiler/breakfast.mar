@@ -4,12 +4,14 @@ import bacon.mar
 import toast.mar
 import egg.mar
 import yogurt.mar
+import c.mar
 
 | Compiler Stages:
 | - Bacon
 | - Toast
 | - Egg
 | - Yogurt
+| - C
 
 fun main(): Never {
   println("Hello, world!\n")
@@ -30,7 +32,11 @@ fun main(): Never {
   println("Egg:\n{egg}\n")
 
   var yogurt = egg.to_yogurt()
-  println("Yogurt:\n{yogurt}")
+  println("Yogurt:\n{yogurt}\n")
+
+  var c = yogurt.to_c()
+  write_file("test.c", c.code.bytes())
+  println("\nWrote C code to test.c")
 
   exit(0)
 }

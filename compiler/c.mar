@@ -1,0 +1,265 @@
+| C Source Code  
+
+import breakfast.mar
+
+struct CCode { code: Str }
+
+fun write[W](writer: W, c: CCode) { writer."{c.code}" }
+
+fun collect_types(yogurt: Yogurt): Set[YogurtType] {
+  var types = set[YogurtType]()
+  for fun_ in yogurt.funs do {
+    for expr in fun_.value.exprs do {
+      var type = expr.type
+      types.&.put(type)
+    }
+  }
+  types
+}
+
+fun mangle(type: YogurtType): Str {
+  var b = str_builder().&
+  b."Type_"
+  b.mangle(type)
+  b.to_str()
+}
+fun mangle[W](writer: W, type: YogurtType) {
+  switch type
+  case comptime_int(int) writer."{int}"
+  case int writer."int"
+  case comptime_string(string) {
+    writer."comptimeString_"
+    writer.mangle(string)
+  }
+  case string writer."string"
+  case enum_(variants) {
+    if variants.size != 1 then writer."enum_of_"
+    for variant in variants do {
+      writer."{variant.key}"
+      if variant.value.is_not_empty() then {
+        writer."_of_"
+        for arg in variant.value do
+          writer.mangle(arg)
+        writer."_end_"
+      }
+    }
+    if variants.size != 1 then writer."_end_"
+  }
+  case fun_(signature) {
+    writer."fun_"
+    writer.mangle(signature)
+  }
+  case never writer."never"
+}
+fun mangle(str: Str): Str {
+  var b = str_builder().&
+  b.mangle(str)
+  b.to_str()
+}
+fun mangle[W](writer: W, str: Str) {
+  for char in str.chars() do
+    if char.is_letter() then writer."{char}"
+    else writer."_{char.byte.to_int().radix(16)}_"
+}
+fun mangle(id: YogurtId): Str { "_{id.int}" }
+
+fun to_c(yogurt: Yogurt): CCode {
+  var b = str_builder().&
+  b."// This is a generated file. Do not edit by hand.\n
+    '\n
+    '#include <stdint.h>\n
+    '#include <stdio.h>\n
+    '#include <stdlib.h>\n
+    '\n
+    '// Types:\n"
+
+  for type in yogurt.collect_types() do {
+    b."\n// {type}\n"
+    var mangled = type.mangle()
+    switch type
+    case comptime_int(int) b."typedef struct \{\} {mangled};"
+    case int b."typedef int64_t {mangled};"
+    case comptime_string(str) b."typedef struct \{\} {mangled};"
+    case string b."typedef struct \{ char* data; size_t len; \} {mangled};"
+    case enum_(variants) {
+      b."typedef struct \{\n
+        '    uint8_t tag; // {variants}\n
+        '    union \{\n"
+      for variant in variants do {
+        b."        struct \{ "
+        for arg in variant.value.iter().&.enumerate() do
+          b."{arg.item.mangle()} _{arg.index}; "
+        b."\} {variant.key.mangle()};\n"
+      }
+      b."    \} as;\n
+        '\} {mangled};"
+    }
+    case fun_(fun_) b."typedef struct \{\} {mangled};"
+    case never b."typedef struct \{\} {mangled};"
+    b."\n"
+  }
+
+  b."\n// Function declarations:\n\n"
+
+  for fun_ in yogurt.funs do {
+    var signature = fun_.key
+    var fun_ = fun_.value
+
+    var return_type = fun_.get(fun_.body.returns).type
+    b."{return_type.mangle()} {signature.str.mangle()}("
+
+    var first = true
+    for param in fun_.body.params do {
+      if first then first = false else b.", "
+      b."{fun_.get(param).type.mangle()} {param.mangle()}"
+    }
+    b.");\n"
+  }
+
+  b."\n// Function implementations:\n\n"
+
+  for fun_ in yogurt.funs do {
+    var signature = fun_.key
+    var fun_ = fun_.value
+
+    var return_type = fun_.get(fun_.body.returns).type
+    b."{return_type.mangle()} {signature.str.mangle()}("
+
+    var first = true
+    for param in fun_.body.params do {
+      if first then first = false else b.", "
+      b."{fun_.get(param).type.mangle()} {param.mangle()}"
+    }
+    b.") \{\n"
+    fun_.body.to_c(fun_, b, 1)
+    b."    return {fun_.body.returns.mangle()};\n"
+    b."\}\n\n"
+  }
+
+  b."int main(int argc, char** argv) \{\n
+    '    main_20_int(argc);\n
+    '    return 0;\n
+    '}\n
+    '"
+
+  CCode { code = b.to_str() }
+}
+
+fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
+  for id in body.exprs do {
+    for i in 0..indentation do writer."    "
+    var expr = fun_.get(id)
+    writer."{expr.type.mangle()} {id.mangle()};\n"
+    
+    switch expr.value
+    case param unreachable()
+    case comptime {}
+    case switch_(switch_) {
+      for i in 0..indentation do writer."    "
+      var type = fun_.get(switch_.condition).type.enum_.unwrap()
+      writer."switch ({switch_.condition.mangle()}.tag) \{\n"
+      for case_ in switch_.cases do {
+        for i in 0..indentation do writer."    "
+        var index = 0
+        for tag in type.iter().&.enumerate() do {
+          if tag.item.key == case_.key then index = tag.index
+        }
+        writer."    case {index}:\n"
+        case_.value.to_c(fun_, writer, indentation + 2)
+        for i in 0..indentation do writer."    "
+        writer."        {id.mangle()} = {case_.value.returns.mangle()};\n"
+        for i in 0..indentation do writer."    "
+        writer."        break;\n"
+      }
+      for i in 0..indentation do writer."    "
+      writer."\}\n"
+    }
+    case tag(tag) {
+      writer."TODO: Initialize tag\n"
+    }
+    case call(call) {
+      for i in 0..indentation do writer."    "
+      var arg_types = vec[YogurtType]()
+      for arg in call.args do arg_types.&.push(fun_.get(arg).type)
+      var signature = yogurt_signature(
+        fun_.get(call.receiver).type.fun_.unwrap("You can only call funs."),
+        arg_types.to_slice()
+      )
+      writer."{id.mangle()} = {signature.str.mangle()}("
+      var first = true
+      for arg in call.args do {
+        if first then first = false else writer.", "
+        writer."{arg.mangle()}"
+      }
+      writer.");\n"
+    }
+    case cast(cast) {
+      var source_type = fun_.get(cast).type
+      var target_type = expr.type
+      
+      if source_type is never then continue
+
+      for i in 0..indentation do writer."    "
+      switch target_type
+      case int
+        writer."{id.mangle()} = {source_type.comptime_int.unwrap()};\n"
+      case string {
+        var string = source_type.comptime_string.unwrap()
+        writer."{id.mangle()}.data = {string.debug()};\n"
+        for i in 0..indentation do writer."    "
+        writer."{id.mangle()}.len = {string.len};\n"
+      }
+      case enum_(target_variants) {
+        writer."switch ({cast.mangle()}.tag) \{\n"
+        for variant in source_type.enum_.unwrap().iter().&.enumerate()
+        do {
+          var target_index = 0
+          for tag in target_variants.iter().&.enumerate() do {
+            if tag.item.key == variant.item.key then target_index = tag.index
+          }
+          for i in 0..indentation do writer."    "
+          writer."    case {variant.index}: 
+            '{id.mangle()}.tag = {target_index}; break;\n"
+        }
+        for i in 0..indentation do writer."    "
+        writer."\}\n"
+      }
+      default panic("casting {source_type} to {target_type} is not supported")
+    }
+    case instruction(instruction) {
+      for i in 0..indentation do writer."    "
+      var args = instruction.args
+      switch instruction.instruction
+      case add writer."{id.mangle()} = {args.get(0).mangle()} + 
+        '{args.get(1).mangle()};\n"
+      case sub writer."{id.mangle()} = {args.get(0).mangle()} - 
+        '{args.get(1).mangle()};\n"
+      case mul writer."{id.mangle()} = {args.get(0).mangle()} * 
+        '{args.get(1).mangle()};\n"
+      case div writer."{id.mangle()} = {args.get(0).mangle()} / 
+        '{args.get(1).mangle()};\n"
+      case compare {
+        writer."if ({args.get(0).mangle()} < {args.get(1).mangle()}) 
+          '{id.mangle()}.tag = 0;\n"
+        for i in 0..indentation do writer."    "
+        writer."if ({args.get(0).mangle()} == {args.get(1).mangle()}) 
+          '{id.mangle()}.tag = 1;\n"
+        for i in 0..indentation do writer."    "
+        writer."if ({args.get(0).mangle()} > {args.get(1).mangle()}) 
+          '{id.mangle()}.tag = 2;\n"
+      }
+      case concat {
+        writer."// TODO: implement concat"
+      }
+      case crash {
+        writer."for (int i = 0; i < {args.get(0).mangle()}.len; i++)\n"
+        for i in 0..indentation do writer."    "
+        writer."    fprintf(stderr, \"%c\", {args.get(0).mangle()}.data[i]);\n"
+        for i in 0..indentation do writer."    "
+        writer."fprintf(stderr, \"\\n\");\n"
+        for i in 0..indentation do writer."    "
+        writer."exit(1);\n"
+      }
+    }
+  }
+}
