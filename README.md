@@ -1,60 +1,49 @@
 # The Breakfast Programming Language
 
-> This is a work in progress.
-> This readme is aspirational, many things don't work yet.
-
-Breakfast is a programming language for writing functional, fast, and reusable code.
+Breakfast is a programming language for writing functional, fast, reusable code.
 
 **Functional**:
-Functions don't have side effects.
-They are eagerly evaluated.
-All data is acyclic.
+Functions can't have side effects. Data is immutable and acyclic. Code is eagerly evaluated.
 
 **Fast**:
-All types are known at compile time.
-Data has an efficient memory layout.
-Garbage collection works using reference counting.
+Types are known at compile time. Values have an efficient memory layout.
 
 **Reusable**:
-You can write generic code that inspects types at compile time.
-This means you don't need macros.
+You can write generic code. You can inspect types at compile time.
 
-## Features
+## Intro
 
-Breakfast has structural typing.
-Types are always uppercase, type variables are lowercase.
-`|` defines enums, `&` defines structs.
+Type names are always uppercase. Type variables are lowercase. Use `&` to create structs and `|` to create enums.
 
 ```breakfast
 Json =
   | Int Int
     Map (Map String Json)
-    ...
-Map key value =
-  & entries: Slice (MapEntry key value)
-    size: Int
-MapEntry key value =
-  | Empty
-    Filled key value
+    Bool Bool
+
+List t = & buffer: (Buffer t) len: Int
 ```
 
-Functions have type annotations.
-You can always figure out the return type of a function just by looking at the signature.
-Breakfast allows overloading based on the parameter types.
+Function names are always lowercase or symbols. The signatures of functions have type annotations that allow you to figure out the return type without looking at the body.
 
 ```breakfast
-+ a: Int b: Int -> Int = builtins.add a b
++ a: Int b: Int = builtins.add a b
++ a: String b: String = builtins.concat a b
 
-size_of type: Type -> Int =
-  % type_info type
-    Int: 8
-    Struct field: ...
-    Enum: ...
-    ...
+get list: (List t) index: Int -> t = ...
+get map: (Map k v) key: k -> v = ...
 
-get map: (Map k v) key: k -> Maybe v = ...
-
-parse json: Json target: Type -> target = ...
+parse json: Json target: Type -> target =
+  % type_info target
+    Int:
+      % json
+        Int int: int
+        else: crash "Expected int, found other stuff."
+    Struct fields:
+      % json
+        Map map:
+          ...
+        else: crash ...
 ```
 
 ## TODO

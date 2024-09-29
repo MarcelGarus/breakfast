@@ -6,10 +6,8 @@ not a =
     True: False
     False: True
 
-format value =
-  type = typeOf value
-  info = typeInfo type
-  switch info
+format [T] value: T -> Str =
+  % typeInfo T
     Int: ...
     Struct fields:
       ...
@@ -29,29 +27,13 @@ is_stringy type =
     String: True
     _: False
 
-+ a b =
-  type_a = type_of a
-  type_b = type_of b
-  %
-    and
-      is_stringy type_a
-      is_stringy type_b
-    True: std.string.concat a b
-    False:
++ a: Int b: Int = std.builtins.add a b
++ a: String b: String = std.builtins.concat a b
 
-
-  info = type_info type
-  % info
-    ComptimeInt int: ...
-    Int:
-    ComptimeString:
-    String:
-    Enum variant:
-
-
+TypeInfo = [Int, String, Enum (Map String Type), Struct (Map String Type)]
 
 compare a b = builtin_compare a b
-type_info type = builtin_type_info type
+type_info [T] type: T -> TypeInfo = builtin_type_info type
 crash message = builtin_crash message
 
 is_less a b =
