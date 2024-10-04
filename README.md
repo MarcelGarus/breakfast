@@ -49,3 +49,8 @@ parse json: Json target: Type -> target =
 ## TODO
 
 - think of file ending (.bf?)
+- have some way of explicitly referencing compiler builtins in the language itself
+  ```
+  builtin_add a: Int b: Int = magiccompilerbuiltin Add
+  Int = magiccompilerbuiltin Int
+  ```
