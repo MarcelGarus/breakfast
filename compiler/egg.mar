@@ -1,68 +1,110 @@
 | Expression-Guided Graph  
+| A representation of code that is simplified and more suitable for
+| type-checking.
+|
+| Types:
+|   Names of types are resolved. Usages of type definitions (which are more like
+|   aliases anyway) have been resolved so that types have no names anymore –
+|   they are completely structural.
+|
+| Functions:
+|   Names of locals and types are resolved. Function calls are not resolved to
+|   specific functions yet, as this requires overloading resolution. Nested
+|   expressions in function bodies have been flattened to a series of small
+|   expressions.
 
 import breakfast.mar
 
-struct Egg { defs: Map[String, EggDef] }
-enum EggDef { value: EggFun, fun_: EggFun, builtin: Builtin }
-struct EggFun { exprs: Slice[EggExpr], body: EggBody }
-struct EggId { int: Int }
+struct Egg { funs: List[EggFun] }
 
+enum EggType {
+  variable: String,
+  int,
+  string,
+  type,
+  never,
+  enum_: Map[String, Slice[EggType]],
+}
+
+struct EggFun {
+  name: String, params: Slice[EggType], return_type: EggType, impl: EggFunImpl
+}
+enum EggFunImpl { code: EggCode, builtin: Builtin }
+struct EggCode { exprs: Slice[EggExpr], body: EggBody }
+struct EggId { int: Int }
 struct EggBody { params: Slice[EggId], exprs: Slice[EggId], returns: EggId }
+
 enum EggExpr {
   param,
   int: Int,
   string: String,
   symbol: String,
-  global: String,
   switch_: EggSwitch,
   call: EggCall,
 }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
-struct EggCall { receiver: EggId, args: Slice[EggId] }
+struct EggCall { receiver: String, args: Slice[EggId] }
 
 fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
 fun hash(hasher: &Hasher, id: EggId) { hasher.hash(id.int) }
 
-fun get(fun_: EggFun, id: EggId): EggExpr { fun_.exprs.get(id.int) }
+fun get(code: EggCode, id: EggId): EggExpr { code.exprs.get(id.int) }
 
 fun write[W](writer: W, egg: Egg) {
   var first = true
-  for def in egg.defs do {
+  for fun_ in egg.funs do {
     if first then first = false else writer."\n"
-    writer."{def.key}:"
-    switch def.value
-    case value(fun_) writer.write(fun_.body, fun_, 1)
-    case fun_(fun_) writer.write(fun_.body, fun_, 1)
-    case builtin(builtin) writer." -"
+    writer."{fun_.name}"
+    for param in fun_.params do writer." {param}"
+    writer." -> {fun_.return_type} ="
+    switch fun_.impl
+    case code(code) writer.write(code.body, code, 1)
+    case builtin(builtin) writer." ..."
   }
 }
-fun write[W](writer: W, id: EggId) { writer.":{id.int}" }
-fun write[W](writer: W, body: EggBody, fun_: EggFun, indentation: Int) {
+fun write[W](writer: W, type: EggType) {
+  switch type
+  case variable(variable) writer."{variable}"
+  case int writer."Int"
+  case string writer."String"
+  case type writer."Type"
+  case never writer."Never"
+  case enum_(variants) {
+    writer."(|"
+    for variant in variants do {
+      writer." ({variant.key}"
+      for arg in variant.value do writer." {arg}"
+      writer.")"
+    }
+    writer.")"
+  }
+}
+fun write[W](writer: W, id: EggId) { writer."@{id.int}" }
+fun write[W](writer: W, body: EggBody, code: EggCode, indentation: Int) {
   for param in body.params do writer." {param}"
   writer."\n"
   for id in body.exprs do {
     for i in 0..indentation do writer."  "
     writer."{id} = "
-    writer.write(fun_.get(id), fun_, indentation)
+    writer.write(code.get(id), code, indentation)
     writer."\n"
   }
   for i in 0..indentation do writer."  "
   writer."{body.returns}"
 }
-fun write[W](writer: W, expr: EggExpr, fun_: EggFun, indentation: Int) {
+fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   switch expr
   case int(int) writer."int {int}"
   case string(string) writer."string {string.debug()}"
   case symbol(symbol) writer."symbol {symbol}"
   case param(param) writer."param {param}"
-  case global(global) writer."global {global}"
   case switch_(switch_) {
     writer."switch {switch_.condition}"
     for case_ in switch_.cases do {
       writer."\n"
       for i in 0..indentation do writer."  "
       writer."  {case_.key}:"
-      writer.write(case_.value, fun_, indentation + 2)
+      writer.write(case_.value, code, indentation + 2)
     }
   }
   case call(call) {
@@ -80,16 +122,16 @@ fun write[W](writer: W, expr: EggExpr, fun_: EggFun, indentation: Int) {
 |   body. When exiting the body, trim the vector to that length – all names
 |   defined inside the body automatically go out of scope.
 
-struct Visible { vars: List[Tuple2[String, NameBinding]] }
-enum NameBinding { global: String, local: EggId }
-fun visible(): _ { Visible { vars = list[Tuple2[String, NameBinding]]() } }
-fun define(visible: &Visible, name: String, value: NameBinding) {
-  visible.vars.&.push(tuple(name, value))
+struct Visible { vars: List[NameBinding] }
+struct NameBinding { name: String, id: EggId }
+fun visible(): _ { Visible { vars = list[NameBinding]() } }
+fun define(visible: &Visible, name: String, id: EggId) {
+  visible.vars.&.push(NameBinding { name, id })
 }
-fun lookup(visible: Visible, name: String): Maybe[NameBinding] {
+fun lookup(visible: Visible, name: String): Maybe[EggId] {
   for binding in visible.vars.to_slice().rev_iter() do
-    if binding.a == name then return some(binding.b)
-  none[NameBinding]()
+    if binding.name == name then return some(binding.id)
+  none[EggId]()
 }
 struct VisibleSnapshot { vars_len: Int }
 fun snapshot(visible: Visible): _ {
@@ -102,58 +144,125 @@ fun restore(visible: &Visible, snapshot: VisibleSnapshot) {
 | Converting Toast To Egg  
 
 fun to_egg(toast: Toast): Egg {
-  var defs = map[String, EggDef]()
-  var visible = visible()
+  var funs = list[EggFun]()
 
-  var body = toast.body or panic("Top-level Toast is not a body.")
+  for builtin in builtins do funs.&.push(builtin.create_builtin_fun())
+  for def in toast.defs do
+    if def is fun_(fun_) then
+      funs.&.push(EggFun {
+        name = fun_.name,
+        params = {
+          var params = list[EggType]()
+          for param in fun_.params do
+            params.&.push(param.type.to_egg(toast))
+          params.to_slice()
+        },
+        return_type = fun_.return_type.to_egg(toast),
+        impl = EggFunImpl.code({
+          var visible = visible()
+          var compiler = egg_code_compiler().&
+          var body = compiler.egg_body_compiler().&
 
-  for builtin in builtins do {
-    var name = "builtin_{builtin}"
-    visible.&.define(name, NameBinding.global("@{name}"))
-    defs.&.put("@{name}", EggDef.builtin(builtin))
-  }
-  for toast in body do {
-    var def = toast.def or panic("top-level non-def:\n{toast}")
-    visible.&.define(def.name, NameBinding.global(def.name))
-  }
-  for toast in body do {
-    var def = toast.def.unwrap()
-    var name = def.name
-    var value = def.value.*
-    var snapshot = visible.snapshot()
-    var value =
-      switch value
-      case fun_(fun_) {
-        var compiler = egg_fun_compiler().&
-        var body = compiler.egg_body_compiler().&
-        for param in fun_.params do
-          visible.&.define(param, NameBinding.local(body.push_param()))
-        var body = body.finish(fun_.body.to_egg(body, visible.&))
-        EggDef.fun_(EggFun {
-          exprs = compiler.exprs.to_slice(), body
+          for param in fun_.params do
+            visible.&.define(param.name, body.push_param())
+          var returned = fun_.body.to_egg(body, visible.&)
+          var body = body.finish(returned)
+
+          EggCode {
+            exprs = compiler.exprs.to_slice(),
+            body,
+          }
         })
-      }
-      default {
-        var compiler = egg_fun_compiler().&
-        var body = compiler.egg_body_compiler().&
-        var body = body.finish(value.to_egg(body, visible.&))
-        EggDef.value(EggFun {
-          exprs = compiler.exprs.to_slice(), body
-        })
-      }
-    visible.&.restore(snapshot)
-    defs.&.put(name, value)
-  }
+      })
 
-  Egg { defs }
+  Egg { funs }
 }
 
-struct EggFunCompiler { exprs: List[EggExpr] }
+fun to_egg(type: ToastType, toast: Toast): EggType {
+  type.to_egg(toast, map[String, EggType]())
+}
+fun to_egg(type: ToastType, toast: Toast, env: Map[String, EggType]): EggType {
+  switch type
+  case variable(variable)
+    if env.get_maybe(variable) is some(type)
+    then type
+    else EggType.variable(variable)
+  case call(call) {
+    if call.name == "Int" then {
+      call.args.is_empty() or panic("called Int with args")
+      return EggType.int
+    }
+    if call.name == "String" then {
+      call.args.is_empty() or panic("called String with args")
+      return EggType.string
+    }
+    if call.name == "Type" then {
+      call.args.is_empty() or panic("called Type with args")
+      return EggType.type
+    }
+    for def in toast.defs do
+      if def is type(def) then
+        if def.name == call.name then {
+          var inner_env = map[String, EggType]()
+          def.params.len == call.args.len or
+            panic("tried to instantiate {def.name} with {call.args.len} args, but it needs {def.params.len}")
+          for both in zip(def.params.iter(), call.args.iter()) do
+            inner_env.&.put(both.a, both.b.to_egg(toast, env))
+          return def.type.to_egg(toast, inner_env)
+        }
+    panic("{call.name} doesn't exist")
+  }
+  case enum_(enum_) {
+    var variants = map[String, Slice[EggType]]()
+    for variant in enum_ do {
+      var args = list[EggType]()
+      for arg in variant.value do args.&.push(arg.to_egg(toast, env))
+      variants.&.put(variant.key, args.to_slice())
+    }
+    EggType.enum_(variants)
+  }
+}
+
+fun create_builtin_fun(builtin: Builtin): EggFun {
+  var signature =
+    switch builtin
+    case add tuple(list(EggType.int, EggType.int), EggType.int)
+    case sub tuple(list(EggType.int, EggType.int), EggType.int)
+    case mul tuple(list(EggType.int, EggType.int), EggType.int)
+    case div tuple(list(EggType.int, EggType.int), EggType.int)
+    case compare tuple(
+      list(EggType.int, EggType.int),
+      EggType.enum_(map(
+        "Less"    -> empty_slice[EggType](),
+        "Equal"   -> empty_slice[EggType](),
+        "Greater" -> empty_slice[EggType](),
+      ))
+    )
+    case concat tuple(list(EggType.string, EggType.string), EggType.string)
+    case type_info tuple(
+      list(EggType.type),
+      EggType.enum_(map(
+        "Int"    -> empty_slice[EggType](),
+        "String" -> empty_slice[EggType](),
+        "Type"   -> empty_slice[EggType](),
+        "Enum"   -> empty_slice[EggType](),
+      ))
+    )
+    case crash tuple(list(EggType.string), EggType.never)
+  EggFun {
+    name = "builtin_{builtin}",
+    params = signature.a.to_slice(),
+    return_type = signature.b,
+    impl = EggFunImpl.builtin(builtin),
+  }
+}
+
+struct EggCodeCompiler { exprs: List[EggExpr] }
 struct EggBodyCompiler {
-  parent: &EggFunCompiler, params: List[EggId], exprs: List[EggId]
+  parent: &EggCodeCompiler, params: List[EggId], exprs: List[EggId]
 }
-fun egg_fun_compiler(): _ { EggFunCompiler { exprs = list[EggExpr]() } }
-fun egg_body_compiler(parent: &EggFunCompiler): _ {
+fun egg_code_compiler(): _ { EggCodeCompiler { exprs = list[EggExpr]() } }
+fun egg_body_compiler(parent: &EggCodeCompiler): _ {
   EggBodyCompiler { parent, params = list[EggId](), exprs = list[EggId]() }
 }
 fun finish(body: EggBodyCompiler, id: EggId): EggBody {
@@ -174,16 +283,13 @@ fun push(body: &EggBodyCompiler, expr: EggExpr): EggId {
   id
 }
 
-fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
+fun to_egg(toast: ToastExpr, body: &EggBodyCompiler, visible: &Visible): EggId {
   switch toast
   case int(int) body.push(EggExpr.int(int))
   case string(str) body.push(EggExpr.string(str))
   case symbol(symbol) body.push(EggExpr.symbol(symbol))
-  case name(name) {
-    switch visible.lookup(name) or panic("unknown referenced name {name}")
-    case global(global) body.push(EggExpr.global(global))
-    case local(local) local
-  }
+  case name(name)
+    visible.lookup(name) or panic("unknown referenced name {name}")
   case switch_(switch_) {
     var condition = switch_.condition.to_egg(body, visible)
     var cases = map[String, EggBody]()
@@ -191,7 +297,7 @@ fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
       var snapshot = visible.snapshot()
       var case_body = body.parent.egg_body_compiler().&
       for param in case_.params do
-        visible.define(param, NameBinding.local(case_body.push_param()))
+        visible.define(param, case_body.push_param())
       var returns = case_.body.to_egg(case_body, visible)
       var case_body = case_body.finish(returns)
       visible.restore(snapshot)
@@ -200,17 +306,17 @@ fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
     body.push(EggExpr.switch_(EggSwitch { condition, cases }))
   }
   case call(call) {
-    var receiver = call.receiver.to_egg(body, visible)
+    var receiver = call.receiver.name or
+      panic("called non-name {call.receiver.debug()}")
     var args = list[EggId]()
     for arg in call.args do args.&.push(arg.to_egg(body, visible))
     body.push(EggExpr.call(EggCall { receiver, args = args.to_slice() }))
   }
-  case def(def) {
-    var value = def.value.to_egg(body, visible)
-    visible.define(def.name, NameBinding.local(value))
+  case var_(var_) {
+    var value = var_.value.to_egg(body, visible)
+    visible.define(var_.name, value)
     value
   }
-  case fun_(fun_) panic("non-top-level function")
   case body(exprs) {
     var last = none[EggId]()
     for expr in exprs do last = some(expr.to_egg(body, visible))

@@ -1,16 +1,14 @@
 | Totally Okay Abstract Syntax Tree  
-| Tree that represents the syntactical language constructs.
+| Tree that represents the syntactical language constructs. This data structure
+| should roughly correspond to the content of Breakfast files and be suitable
+| for formatting etc.
 
 import breakfast.mar
 
 struct Toast { defs: Slice[ToastDef] }
-struct ToastDef { name: String, kind: ToastDefKind }
-enum ToastDefKind { type: ToastTypeDef, fun_: ToastFun }
+enum ToastDef { type: ToastTypeDef, fun_: ToastFun }
 
-struct ToastTypeDef {
-  params: Slice[String],
-  type: ToastType,
-}
+struct ToastTypeDef { name: String, params: Slice[String], type: ToastType }
 enum ToastType {
   variable: String,
   call: ToastTypeCall,
@@ -19,7 +17,10 @@ enum ToastType {
 struct ToastTypeCall { name: String, args: Slice[ToastType] }
 
 struct ToastFun {
-  params: Slice[ToastParam], return_type: ToastType, body: ToastExpr
+  name: String,
+  params: Slice[ToastParam],
+  return_type: ToastType,
+  body: ToastExpr,
 }
 struct ToastParam { name: String, type: ToastType }
 enum ToastExpr {
@@ -41,14 +42,15 @@ fun write[W](writer: W, toast: Toast) {
   var first = true
   for def in toast.defs do {
     if first then first = false else writer."\n"
-    writer."{def.name}"
-    switch def.kind
+    switch def
     case type(def) {
+      writer."{def.name}"
       for param in def.params do writer." {param}"
       writer." = "
       writer."{def.type}"
     }
     case fun_(def) {
+      writer."{def.name}"
       for param in def.params do writer." {param.name}: {param.type}"
       writer." -> {def.return_type}"
       writer." =\n"
@@ -297,9 +299,9 @@ fun to_toast_types(bacons: Slice[Bacon]): Slice[ToastType] {
   for bacon in bacons do types.&.push(bacon.to_toast_type())
   types.to_slice()
 }
-fun to_toast_type_def(bacon: Bacon): Maybe[ToastDef] {
+fun to_toast_type_def(bacon: Bacon): Maybe[ToastTypeDef] {
   var parser = parser(bacon.line)
-  var name = parser.&.parse_symbol() or return none[ToastDef]()
+  var name = parser.&.parse_symbol() or return none[ToastTypeDef]()
   var params = list[String]()
   loop params.&.push(parser.&.parse_name() or break)
   parser.&.consume(#=) or panic("expected = after type signature")
@@ -313,10 +315,7 @@ fun to_toast_type_def(bacon: Bacon): Maybe[ToastDef] {
       bacon.children.len == 1 or panic("type def, but {bacon.children.len} types given")
       bacon.children.get(0).to_toast_type()
     }
-  some(ToastDef {
-    name,
-    kind = ToastDefKind.type(ToastTypeDef { params = params.to_slice(), type }),
-  })
+  some(ToastTypeDef { name, params = params.to_slice(), type })
 }
 
 fun to_toast_expr(bacon: Bacon): ToastExpr {
@@ -367,9 +366,9 @@ fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   for bacon in bacons do exprs.&.push(bacon.to_toast_expr())
   exprs.to_slice()
 }
-fun to_toast_fun_def(bacon: Bacon): Maybe[ToastDef] {
+fun to_toast_fun_def(bacon: Bacon): Maybe[ToastFun] {
   var parser = parser(bacon.line)
-  var name = parser.&.parse_name() or return none[ToastDef]()
+  var name = parser.&.parse_name() or return none[ToastFun]()
   var params = list[ToastParam]()
   loop {
     var name = parser.&.parse_name() or break
@@ -389,12 +388,7 @@ fun to_toast_fun_def(bacon: Bacon): Maybe[ToastDef] {
     } else
       ToastExpr.body(bacon.children.to_toast_exprs())
 
-  some(ToastDef {
-    name,
-    kind = ToastDefKind.fun_(ToastFun {
-      params = params.to_slice(), return_type, body
-    })
-  })
+  some(ToastFun { name, params = params.to_slice(), return_type, body })
 }
 
 fun to_toast(bacon: Bacon): Toast {
@@ -402,8 +396,14 @@ fun to_toast(bacon: Bacon): Toast {
 
   var defs = list[ToastDef]()
   for bacon in bacon.children do {
-    if bacon.to_toast_type_def() is some(def) then { defs.&.push(def) continue }
-    if bacon.to_toast_fun_def()  is some(def) then { defs.&.push(def) continue }
+    if bacon.to_toast_type_def() is some(def) then {
+      defs.&.push(ToastDef.type(def))
+      continue
+    }
+    if bacon.to_toast_fun_def() is some(def) then {
+      defs.&.push(ToastDef.fun_(def))
+      continue
+    }
 
     panic("couldn't parse line: {bacon.line}")
   }

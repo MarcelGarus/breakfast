@@ -25,13 +25,10 @@ fun mangle(type: YogurtType): String {
 }
 fun mangle[W](writer: W, type: YogurtType) {
   switch type
-  case comptime_int(int) writer."{int}"
   case int writer."int"
-  case comptime_string(string) {
-    writer."comptimeStringing_"
-    writer.mangle(string)
-  }
   case string writer."string"
+  case type writer."type"
+  case never writer."never"
   case enum_(variants) {
     if variants.size != 1 then writer."enum_of_"
     for variant in variants do {
@@ -45,11 +42,6 @@ fun mangle[W](writer: W, type: YogurtType) {
     }
     if variants.size != 1 then writer."_end_"
   }
-  case fun_(signature) {
-    writer."fun_"
-    writer.mangle(signature)
-  }
-  case never writer."never"
 }
 fun mangle(str: String): String {
   var b = string_builder().&
@@ -77,10 +69,10 @@ fun to_c(yogurt: Yogurt): CCode {
     b."\n// {type}\n"
     var mangled = type.mangle()
     switch type
-    case comptime_int(int) b."typedef struct \{\} {mangled};"
     case int b."typedef int64_t {mangled};"
-    case comptime_string(str) b."typedef struct \{\} {mangled};"
     case string b."typedef struct \{ char* data; size_t len; \} {mangled};"
+    case type b."typedef struct \{\} {mangled};"
+    case never b."typedef struct \{\} {mangled};"
     case enum_(variants) {
       b."typedef struct \{\n
         '    uint8_t tag; // {variants}\n
@@ -94,8 +86,6 @@ fun to_c(yogurt: Yogurt): CCode {
       b."    \} as;\n
         '\} {mangled};"
     }
-    case fun_(fun_) b."typedef struct \{\} {mangled};"
-    case never b."typedef struct \{\} {mangled};"
     b."\n"
   }
 
@@ -151,9 +141,31 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
     var expr = fun_.get(id)
     writer."{expr.type.mangle()} {id.mangle()};\n"
     
-    switch expr.value
+    switch expr.op
     case param unreachable()
-    case comptime {}
+    case comptime(value) {
+      for i in 0..indentation do writer."    "
+      switch value.kind
+      case int(int) {
+        writer."{id.mangle()} = {int};\n"
+      }
+      case string(string) {
+        writer."{id.mangle()}.data = {string.debug()};\n"
+        for i in 0..indentation do writer."    "
+        writer."{id.mangle()}.len = {string.len};\n"
+      }
+      case type(type) {
+        writer."// comptime types is (hopefully) not accessed at runtime"
+      }
+      case tag(tag) {
+        var variants = expr.type.enum_.unwrap()
+        var target_index = 0
+        for variant in variants.iter().&.enumerate() do
+          if variant.item.key == tag.a then
+            target_index = variant.index
+        writer."{id.mangle()}.tag = {target_index};\n"
+      }
+    }
     case switch_(switch_) {
       for i in 0..indentation do writer."    "
       var type = fun_.get(switch_.condition).type.enum_.unwrap()
@@ -181,11 +193,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for i in 0..indentation do writer."    "
       var arg_types = list[YogurtType]()
       for arg in call.args do arg_types.&.push(fun_.get(arg).type)
-      var signature = yogurt_signature(
-        fun_.get(call.receiver).type.fun_.unwrap("You can only call funs."),
-        arg_types.to_slice()
-      )
-      writer."{id.mangle()} = {signature.str.mangle()}("
+      writer."{id.mangle()} = {call.receiver.str.mangle()}("
       var first = true
       for arg in call.args do {
         if first then first = false else writer.", "
@@ -201,14 +209,8 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
 
       for i in 0..indentation do writer."    "
       switch target_type
-      case int
-        writer."{id.mangle()} = {source_type.comptime_int.unwrap()};\n"
-      case string {
-        var string = source_type.comptime_string.unwrap()
-        writer."{id.mangle()}.data = {string.debug()};\n"
-        for i in 0..indentation do writer."    "
-        writer."{id.mangle()}.len = {string.len};\n"
-      }
+      case int unreachable()
+      case string unreachable()
       case enum_(target_variants) {
         writer."switch ({cast.mangle()}.tag) \{\n"
         for variant in source_type.enum_.unwrap().iter().&.enumerate()
