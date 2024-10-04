@@ -40,9 +40,11 @@ enum EggExpr {
   string: String,
   symbol: String,
   switch_: EggSwitch,
+  tag: EggTag,
   call: EggCall,
 }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
+struct EggTag { symbol: String, args: Slice[EggId] }
 struct EggCall { receiver: String, args: Slice[EggId] }
 
 fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
@@ -110,6 +112,10 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   case call(call) {
     writer."call {call.receiver}"
     for arg in call.args do writer." {arg}"
+  }
+  case tag(tag) {
+    writer."tag {tag.symbol}"
+    for arg in tag.args do writer." {arg}"
   }
 }
 
@@ -306,11 +312,14 @@ fun to_egg(toast: ToastExpr, body: &EggBodyCompiler, visible: &Visible): EggId {
     body.push(EggExpr.switch_(EggSwitch { condition, cases }))
   }
   case call(call) {
-    var receiver = call.receiver.name or
-      panic("called non-name {call.receiver.debug()}")
     var args = list[EggId]()
     for arg in call.args do args.&.push(arg.to_egg(body, visible))
-    body.push(EggExpr.call(EggCall { receiver, args = args.to_slice() }))
+    var args = args.to_slice()
+
+    switch call.receiver.*
+    case name(receiver) body.push(EggExpr.call(EggCall { receiver, args }))
+    case symbol(symbol) body.push(EggExpr.tag(EggTag { symbol, args }))
+    default panic("called non-name {call.receiver.debug()}")
   }
   case var_(var_) {
     var value = var_.value.to_egg(body, visible)

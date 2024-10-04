@@ -484,20 +484,23 @@ fun to_yogurt(
     YogurtOp.call(YogurtCall {
       receiver = yogurt_signature(name, arg_params), args
     }) $ return_type
+  }
+  case tag(tag) {
+    var symbol = tag.symbol
+    
+    var args = list[YogurtId]()
+    var arg_types = list[YogurtType]()
+    for arg in tag.args do {
+      var arg = compiler.lookup(arg)
+      var type = builder.get(arg).type
+      args.&.push(arg)
+      arg_types.&.push(type)
+    }
+    var args = args.to_slice()
+    var arg_types = arg_types.to_slice()
 
-    | todo("implement calls further. {name} {arg_params.debug()}: {arg_types}")
-
-    | switch builder.get(receiver).type
-    | case enum_(variants) {
-    |   variants.size == 1 or panic("called enum with {variants.size} variants")
-    |   var variant = variants.iter().&.next().unwrap()
-    |   variant.value.is_empty() or panic("called symbol that already has values")
-    |   var symbol = variant.key
-    |   YogurtOp.tag(YogurtTag { symbol, args })
-    |     $ YogurtType.enum_(map(symbol -> arg_types))
-    | }
-    | case fun_(fun_name) {
-      
+    YogurtOp.tag(YogurtTag { symbol, args })
+      $ YogurtType.enum_(map(symbol -> arg_types))
   }
 }
 
