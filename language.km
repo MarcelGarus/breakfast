@@ -1,3 +1,38 @@
+List t =
+  |
+    List
+      String
+      Int
+    Int
+
+get list: (List t) index: Int -> t = ...
+get map: (Map k v) key: k -> v = ...
+
+create_struct values: t target: Type -> target = ...
+
+random target: Type -> target = ...
+
+random :User
+
+json | parse :Fruit
+
+parse_json string: String -> Json = ...
+
+parse json: Json target: Type -> target =
+  % type_info target
+    Int:
+      % json
+        Int int: int
+        else: crash "Expected int, found other stuff."
+    Struct fields:
+      % json
+        Map map:
+          ...
+        else: crash ...
+
+
+
+
 
 foo = 4
 
