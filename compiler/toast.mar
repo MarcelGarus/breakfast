@@ -5,9 +5,9 @@ import breakfast.mar
 
 enum Toast {
   int: Int,
-  string: Str,
-  symbol: Str,
-  name: Str,
+  string: String,
+  symbol: String,
+  name: String,
   switch_: ToastSwitch,
   call: ToastCall,
   def: ToastDef,
@@ -15,10 +15,10 @@ enum Toast {
   body: Slice[Toast],
 }
 struct ToastSwitch { condition: &Toast, cases: Slice[ToastCase] }
-struct ToastCase { symbol: Str, params: Slice[Str], body: Toast }
+struct ToastCase { symbol: String, params: Slice[String], body: Toast }
 struct ToastCall { receiver: &Toast, args: Slice[Toast] }
-struct ToastDef { name: Str, value: &Toast }
-struct ToastFun { params: Slice[Str], body: &Toast }
+struct ToastDef { name: String, value: &Toast }
+struct ToastFun { params: Slice[String], body: &Toast }
 
 fun write[W](writer: W, toast: Toast) { writer.write(toast, 0) }
 fun write[W](writer: W, body: Slice[Toast], indentation: Int) {
@@ -65,7 +65,7 @@ fun write[W](writer: W, expr: Toast, indentation: Int) {
   case body(body) writer.write(body, indentation)
 }
 
-struct Parser { input: Str, cursor: Int }
+struct Parser { input: String, cursor: Int }
 fun current(parser: Parser): Maybe[Char] {
   parser.input.chars().get_maybe(parser.cursor)
 }
@@ -88,9 +88,9 @@ fun parse_int(parser: &Parser): Maybe[Int] {
   if start == parser.cursor then return none[Int]()
   some(num)
 }
-fun parse_string(parser: &Parser): Maybe[Str] {
-  var char = parser.current() or return none[Str]()
-  char == #" or return none[Str]()
+fun parse_string(parser: &Parser): Maybe[String] {
+  var char = parser.current() or return none[String]()
+  char == #" or return none[String]()
   parser.advance()
   var start = parser.cursor
   loop {
@@ -103,7 +103,7 @@ fun parse_string(parser: &Parser): Maybe[Str] {
   some(parser.input.substr(start..end))
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/"
-fun parse_identifier(parser: &Parser): Maybe[Str] {
+fun parse_identifier(parser: &Parser): Maybe[String] {
   var start = parser.cursor
   loop {
     var char = parser.current() or break
@@ -111,17 +111,17 @@ fun parse_identifier(parser: &Parser): Maybe[Str] {
     parser.advance()
   }
   var end = parser.cursor
-  if start == end then return none[Str]()
+  if start == end then return none[String]()
   some(parser.input.substr(start..end))
 }
-fun parse_name(parser: &Parser): Maybe[Str] {
-  var char = parser.current() or return none[Str]()
-  not(char.is_upper()) or return none[Str]()
+fun parse_name(parser: &Parser): Maybe[String] {
+  var char = parser.current() or return none[String]()
+  not(char.is_upper()) or return none[String]()
   parser.parse_identifier()
 }
-fun parse_symbol(parser: &Parser): Maybe[Str] {
-  var char = parser.current() or return none[Str]()
-  char.is_upper() or return none[Str]()
+fun parse_symbol(parser: &Parser): Maybe[String] {
+  var char = parser.current() or return none[String]()
+  char.is_upper() or return none[String]()
   parser.parse_identifier()
 }
 fun parse_atom(parser: &Parser): Maybe[Toast] {
@@ -135,7 +135,7 @@ fun parse_atom(parser: &Parser): Maybe[Toast] {
 fun parse_expr(parser: &Parser): Maybe[Toast] {
   var expr = parser.parse_atom() or return none[Toast]()
 
-  var args = vec[Toast]()
+  var args = list[Toast]()
   loop args.&.push(parser.parse_atom() or break)
   if args.is_not_empty() then
     expr = Toast.call(ToastCall {
@@ -160,7 +160,7 @@ fun create_def(left: Toast, right: Toast): ToastDef {
     ToastDef { name, value = right.put_on_heap() }
   case call(call) {
     var name = call.receiver.*.name or panic("definition of something weird")
-    var params = vec[Str]()
+    var params = list[String]()
     for arg in call.args do
       params.&.push(arg.name or panic("definition of fun with non-name arg"))
     ToastDef {
@@ -188,11 +188,11 @@ fun to_toast(bacon: Bacon): Toast {
         or panic("additional garbage on switch condition line: {parser.input} cursor = {parser.cursor..parser.input.len}")
       expr
     }
-    var cases = vec[ToastCase]()
+    var cases = list[ToastCase]()
     for case_ in bacon.children do {
       var parser = Parser { input = case_.line, cursor = 0 }
       var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
-      var params = vec[Str]()
+      var params = list[String]()
       loop {
         parser.&.consume_whitespace()
         params.&.push(parser.&.parse_name() or break)
@@ -234,7 +234,7 @@ fun to_toast(bacon: Bacon): Toast {
   expr
 }
 fun to_toasts(bacons: Slice[Bacon]): Slice[Toast] {
-  var exprs = vec[Toast]()
+  var exprs = list[Toast]()
   for bacon in bacons do exprs.&.push(bacon.to_toast())
   exprs.to_slice()
 }

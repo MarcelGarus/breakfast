@@ -20,7 +20,7 @@ fun main(): Never {
     eprintln("Couldn't read file")
     exit(1)
   }
-  var content = content.to_str()
+  var content = content.to_string()
 
   var bacon = content.to_bacon()
   println("Bacon:\n{bacon}\n")

@@ -2,7 +2,7 @@
 
 import breakfast.mar
 
-struct Egg { defs: Map[Str, EggDef] }
+struct Egg { defs: Map[String, EggDef] }
 enum EggDef { value: EggFun, fun_: EggFun, builtin: Builtin }
 struct EggFun { exprs: Slice[EggExpr], body: EggBody }
 struct EggId { int: Int }
@@ -11,13 +11,13 @@ struct EggBody { params: Slice[EggId], exprs: Slice[EggId], returns: EggId }
 enum EggExpr {
   param,
   int: Int,
-  string: Str,
-  symbol: Str,
-  global: Str,
+  string: String,
+  symbol: String,
+  global: String,
   switch_: EggSwitch,
   call: EggCall,
 }
-struct EggSwitch { condition: EggId, cases: Map[Str, EggBody] }
+struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggCall { receiver: EggId, args: Slice[EggId] }
 
 fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
@@ -80,13 +80,13 @@ fun write[W](writer: W, expr: EggExpr, fun_: EggFun, indentation: Int) {
 |   body. When exiting the body, trim the vector to that length – all names
 |   defined inside the body automatically go out of scope.
 
-struct Visible { vars: Vec[Tuple2[Str, NameBinding]] }
-enum NameBinding { global: Str, local: EggId }
-fun visible(): _ { Visible { vars = vec[Tuple2[Str, NameBinding]]() } }
-fun define(visible: &Visible, name: Str, value: NameBinding) {
+struct Visible { vars: List[Tuple2[String, NameBinding]] }
+enum NameBinding { global: String, local: EggId }
+fun visible(): _ { Visible { vars = list[Tuple2[String, NameBinding]]() } }
+fun define(visible: &Visible, name: String, value: NameBinding) {
   visible.vars.&.push(tuple(name, value))
 }
-fun lookup(visible: Visible, name: Str): Maybe[NameBinding] {
+fun lookup(visible: Visible, name: String): Maybe[NameBinding] {
   for binding in visible.vars.to_slice().rev_iter() do
     if binding.a == name then return some(binding.b)
   none[NameBinding]()
@@ -102,7 +102,7 @@ fun restore(visible: &Visible, snapshot: VisibleSnapshot) {
 | Converting Toast To Egg  
 
 fun to_egg(toast: Toast): Egg {
-  var defs = map[Str, EggDef]()
+  var defs = map[String, EggDef]()
   var visible = visible()
 
   var body = toast.body or panic("Top-level Toast is not a body.")
@@ -148,13 +148,13 @@ fun to_egg(toast: Toast): Egg {
   Egg { defs }
 }
 
-struct EggFunCompiler { exprs: Vec[EggExpr] }
+struct EggFunCompiler { exprs: List[EggExpr] }
 struct EggBodyCompiler {
-  parent: &EggFunCompiler, params: Vec[EggId], exprs: Vec[EggId]
+  parent: &EggFunCompiler, params: List[EggId], exprs: List[EggId]
 }
-fun egg_fun_compiler(): _ { EggFunCompiler { exprs = vec[EggExpr]() } }
+fun egg_fun_compiler(): _ { EggFunCompiler { exprs = list[EggExpr]() } }
 fun egg_body_compiler(parent: &EggFunCompiler): _ {
-  EggBodyCompiler { parent, params = vec[EggId](), exprs = vec[EggId]() }
+  EggBodyCompiler { parent, params = list[EggId](), exprs = list[EggId]() }
 }
 fun finish(body: EggBodyCompiler, id: EggId): EggBody {
   EggBody {
@@ -186,7 +186,7 @@ fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
   }
   case switch_(switch_) {
     var condition = switch_.condition.to_egg(body, visible)
-    var cases = map[Str, EggBody]()
+    var cases = map[String, EggBody]()
     for case_ in switch_.cases do {
       var snapshot = visible.snapshot()
       var case_body = body.parent.egg_body_compiler().&
@@ -201,7 +201,7 @@ fun to_egg(toast: Toast, body: &EggBodyCompiler, visible: &Visible): EggId {
   }
   case call(call) {
     var receiver = call.receiver.to_egg(body, visible)
-    var args = vec[EggId]()
+    var args = list[EggId]()
     for arg in call.args do args.&.push(arg.to_egg(body, visible))
     body.push(EggExpr.call(EggCall { receiver, args = args.to_slice() }))
   }

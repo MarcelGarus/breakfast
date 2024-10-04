@@ -4,7 +4,7 @@
 import breakfast.mar
 
 struct Bacon {
-  line: Str,
+  line: String,
   children: Slice[Bacon],
 }
 
@@ -25,18 +25,18 @@ fun write[W](writer: W, bacons: Slice[Bacon], indentation: Int) {
 
 struct OngoingBacon {
   indentation: Int,
-  line: Str,
-  children: Vec[OngoingBacon],
+  line: String,
+  children: List[OngoingBacon],
 }
 
 fun to_bacon(bacon: OngoingBacon): Bacon {
-  var children = vec[Bacon]()
+  var children = list[Bacon]()
   for child in bacon.children do children.&.push(child.to_bacon())
   Bacon { line = bacon.line, children = children.to_slice() }
 }
-fun to_bacon(content: Str): Bacon {
+fun to_bacon(content: String): Bacon {
   var root = OngoingBacon {
-    indentation = -1, line = "", children = vec[OngoingBacon]()
+    indentation = -1, line = "", children = list[OngoingBacon]()
   }
   for line in content.lines() do {
     if line.trim().is_empty() then continue
@@ -53,7 +53,7 @@ fun to_bacon(content: Str): Bacon {
       node = last_child
     }
     node.children.&.push(OngoingBacon {
-      indentation, line = line.trim(), children = vec[OngoingBacon]()
+      indentation, line = line.trim(), children = list[OngoingBacon]()
     })
   }
 

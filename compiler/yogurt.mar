@@ -3,7 +3,7 @@
 import breakfast.mar
 
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
-struct YogurtSignature { str: Str }
+struct YogurtSignature { str: String }
 
 struct YogurtFun { exprs: Slice[YogurtExpr], body: YogurtBody }
 struct YogurtId { int: Int }
@@ -21,18 +21,18 @@ enum YogurtValue {
   cast: YogurtId,
   instruction: YogurtInstruction,
 }
-struct YogurtSwitch { condition: YogurtId, cases: Map[Str, YogurtBody] }
-struct YogurtTag { symbol: Str, args: Slice[YogurtId] }
+struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
+struct YogurtTag { symbol: String, args: Slice[YogurtId] }
 struct YogurtCall { receiver: YogurtId, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
 enum YogurtType {
   comptime_int: Int,
   int,
-  comptime_string: Str,
+  comptime_string: String,
   string,
-  enum_: Map[Str, Slice[YogurtType]],
-  fun_: Str,
+  enum_: Map[String, Slice[YogurtType]],
+  fun_: String,
   never,
 }
 
@@ -59,11 +59,11 @@ fun hash(hasher: &Hasher, type: YogurtType) {
 
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
-fun yogurt_signature(name: Str, arg_types: Slice[YogurtType]): YogurtSignature {
-  var b = str_builder().&
+fun yogurt_signature(name: String, arg_types: Slice[YogurtType]): YogurtSignature {
+  var b = string_builder().&
   b."{name}"
   for type in arg_types do b." {type}"
-  YogurtSignature { str = b.to_str() }
+  YogurtSignature { str = b.to_string() }
 }
 fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
 fun hash(hasher: &Hasher, sig: YogurtSignature) { hasher.hash(sig.str) }
@@ -140,9 +140,9 @@ fun write[W](writer: W, type: YogurtType) {
 
 fun $(value: YogurtValue, type: YogurtType): _ { YogurtExpr { value, type } }
 
-struct YogurtFunBuilder { exprs: Vec[YogurtExpr] }
+struct YogurtFunBuilder { exprs: List[YogurtExpr] }
 
-fun yogurt_fun_builder(): _ { YogurtFunBuilder { exprs = vec[YogurtExpr]() } }
+fun yogurt_fun_builder(): _ { YogurtFunBuilder { exprs = list[YogurtExpr]() } }
 fun push(builder: &YogurtFunBuilder, expr: YogurtExpr): YogurtId {
   var id = YogurtId { int = builder.exprs.len }
   builder.exprs.&.push(expr)
@@ -174,11 +174,11 @@ fun to_yogurt(egg: Egg): Yogurt {
   main.body.params.len == 1
     or panic("main takes {main.body.params.len} params instead of 1")
   var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
-  main.to_yogurt(vec(YogurtType.int).to_slice(), "main", egg, yogurt.&)
+  main.to_yogurt(list(YogurtType.int).to_slice(), "main", egg, yogurt.&)
   yogurt
 }
 fun to_yogurt(
-  fun_: EggFun, param_types: Slice[YogurtType], name: Str,
+  fun_: EggFun, param_types: Slice[YogurtType], name: String,
   egg: Egg, yogurt: &Yogurt
 ): YogurtFun {
   var signature = yogurt_signature(name, param_types)
@@ -200,14 +200,14 @@ fun to_yogurt(
 ): YogurtBody {
   param_types.len == body.params.len or
     panic("body params len doesn't matche number of param types")
-  var params = vec[YogurtId]()
+  var params = list[YogurtId]()
   for i in 0..body.params.len do {
     var egg_id = body.params.get(i)
     var yogurt_id = builder.push(YogurtValue.param $ param_types.get(i))
     params.&.push(yogurt_id)
     compiler.add_mapping(egg_id, yogurt_id)
   }
-  var exprs = vec[YogurtId]()
+  var exprs = list[YogurtId]()
   for egg_id in body.exprs do {
     var expr = compiler.egg_fun.get(egg_id).to_yogurt(builder, compiler)
     var yogurt_id = builder.push(expr)
@@ -239,8 +239,8 @@ fun to_yogurt(
       or panic("switched on non-enum")
 
     | Lower all cases that are used by the condition type.
-    var cases = map[Str, YogurtBody]()
-    var case_types = vec[YogurtType]()
+    var cases = map[String, YogurtBody]()
+    var case_types = list[YogurtType]()
     for variant in condition_variants do {
       var case_ = switch_.cases.get_maybe(variant.key) or
         panic("switching on {condition_type}, but {variant.key} is not handled")
@@ -261,7 +261,7 @@ fun to_yogurt(
       if case_type != common_type then {
         eprintln("Insert cast from {case_type} to {common_type}")
         var old_body = case_.value
-        var new_exprs = vec[YogurtId]()
+        var new_exprs = list[YogurtId]()
         for expr in old_body.exprs do new_exprs.&.push(expr)
         var new_returns = builder.push(YogurtValue.cast(old_body.returns) $ common_type)
         new_exprs.&.push(new_returns)
@@ -278,8 +278,8 @@ fun to_yogurt(
   case call(call) {
     var receiver = compiler.lookup(call.receiver)
 
-    var args = vec[YogurtId]()
-    var arg_types = vec[YogurtType]()
+    var args = list[YogurtId]()
+    var arg_types = list[YogurtType]()
     for arg in call.args do {
       var arg = compiler.lookup(arg)
       var type = builder.get(arg).type
@@ -326,7 +326,7 @@ fun to_yogurt(
   }
 }
 
-struct YogurtBodyBuilder { parent: &YogurtFunBuilder, body: Vec[YogurtId] }
+struct YogurtBodyBuilder { parent: &YogurtFunBuilder, body: List[YogurtId] }
 fun push(body: &YogurtBodyBuilder, expr: YogurtExpr): YogurtId {
   var id = body.parent.&.push(expr)
   body.body.&.push(id)
@@ -342,9 +342,9 @@ fun to_yogurt(
 
   var fun_builder = yogurt_fun_builder()
   var body = YogurtBodyBuilder {
-    parent = fun_builder.&, body = vec[YogurtId]()
+    parent = fun_builder.&, body = list[YogurtId]()
   }
-  var params = vec[YogurtId]()
+  var params = list[YogurtId]()
   for i in 0..arg_types.len do
     params.&.push(body.parent.&.push(YogurtValue.param $ arg_types.get(i)))
   var params = params.to_slice()
@@ -370,7 +370,7 @@ fun to_yogurt(
     var a = a.cast_to_int(builder) or panic("called add with non-int")
     var b = b.cast_to_int(builder) or panic("called add with non-int")
     builder.&.push(YogurtValue.instruction(YogurtInstruction {
-      instruction = Instruction.add, args = vec(a, b).to_slice()
+      instruction = Instruction.add, args = list(a, b).to_slice()
     }) $ YogurtType.int)
   }
   case compare {
@@ -392,7 +392,7 @@ fun to_yogurt(
     var b = b.cast_to_int(builder) or panic("called add with non-int")
     builder.&.push(
       YogurtValue.instruction(YogurtInstruction {
-        instruction = Instruction.compare, args = vec(a, b).to_slice()
+        instruction = Instruction.compare, args = list(a, b).to_slice()
       }) $ YogurtType.enum_(map(
         "Less"    -> empty_slice[YogurtType](),
         "Equal"   -> empty_slice[YogurtType](),
@@ -411,7 +411,7 @@ fun to_yogurt(
     var a = a.cast_to_string(builder) or panic("called add with non-string")
     var b = b.cast_to_string(builder) or panic("called add with non-string")
     builder.&.push(YogurtValue.instruction(YogurtInstruction {
-      instruction = Instruction.concat, args = vec(a, b).to_slice()
+      instruction = Instruction.concat, args = list(a, b).to_slice()
     }) $ YogurtType.string)
   }
   case type_info {
@@ -435,7 +435,7 @@ fun to_yogurt(
       or panic("crash only accepts string messages")
     builder.&.push(
       YogurtValue.instruction(YogurtInstruction {
-        instruction = Instruction.crash, args = vec(message).to_slice()
+        instruction = Instruction.crash, args = list(message).to_slice()
       }) $ YogurtType.never
     )
   }
@@ -494,11 +494,11 @@ fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
   case enum_(a_variants) {
     switch b
     case enum_(b_variants) {
-      var variants = map[Str, Slice[YogurtType]]()
+      var variants = map[String, Slice[YogurtType]]()
       for variant in a_variants do variants.&.put(variant.key, variant.value)
       for variant in b_variants do {
         if variants.get_maybe(variant.key) is some(a_args) then {
-          var args = vec[YogurtType]()
+          var args = list[YogurtType]()
           for both in zip(a_args.iter(), variant.value.iter()) do
             args.&.push(join(both.a, both.b) or return none[YogurtType]())
           variants.&.put(variant.key, args.to_slice())

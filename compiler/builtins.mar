@@ -8,7 +8,7 @@ enum Builtin {
 }
 
 var builtins =
-  vec(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare,
+  list(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare,
     Builtin.concat,
     Builtin.type_info, Builtin.crash)
     .to_slice()

@@ -6,7 +6,7 @@ not a =
     True: False
     False: True
 
-format [T] value: T -> Str =
+format [T] value: T -> String =
   % typeInfo T
     Int: ...
     Struct fields:

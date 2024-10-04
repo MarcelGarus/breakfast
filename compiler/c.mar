@@ -2,7 +2,7 @@
 
 import breakfast.mar
 
-struct CCode { code: Str }
+struct CCode { code: String }
 
 fun write[W](writer: W, c: CCode) { writer."{c.code}" }
 
@@ -17,18 +17,18 @@ fun collect_types(yogurt: Yogurt): Set[YogurtType] {
   types
 }
 
-fun mangle(type: YogurtType): Str {
-  var b = str_builder().&
+fun mangle(type: YogurtType): String {
+  var b = string_builder().&
   b."Type_"
   b.mangle(type)
-  b.to_str()
+  b.to_string()
 }
 fun mangle[W](writer: W, type: YogurtType) {
   switch type
   case comptime_int(int) writer."{int}"
   case int writer."int"
   case comptime_string(string) {
-    writer."comptimeString_"
+    writer."comptimeStringing_"
     writer.mangle(string)
   }
   case string writer."string"
@@ -51,20 +51,20 @@ fun mangle[W](writer: W, type: YogurtType) {
   }
   case never writer."never"
 }
-fun mangle(str: Str): Str {
-  var b = str_builder().&
+fun mangle(str: String): String {
+  var b = string_builder().&
   b.mangle(str)
-  b.to_str()
+  b.to_string()
 }
-fun mangle[W](writer: W, str: Str) {
+fun mangle[W](writer: W, str: String) {
   for char in str.chars() do
     if char.is_letter() then writer."{char}"
     else writer."_{char.byte.to_int().radix(16)}_"
 }
-fun mangle(id: YogurtId): Str { "_{id.int}" }
+fun mangle(id: YogurtId): String { "_{id.int}" }
 
 fun to_c(yogurt: Yogurt): CCode {
-  var b = str_builder().&
+  var b = string_builder().&
   b."// This is a generated file. Do not edit by hand.\n
     '\n
     '#include <stdint.h>\n
@@ -142,7 +142,7 @@ fun to_c(yogurt: Yogurt): CCode {
     '}\n
     '"
 
-  CCode { code = b.to_str() }
+  CCode { code = b.to_string() }
 }
 
 fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
@@ -179,7 +179,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
     }
     case call(call) {
       for i in 0..indentation do writer."    "
-      var arg_types = vec[YogurtType]()
+      var arg_types = list[YogurtType]()
       for arg in call.args do arg_types.&.push(fun_.get(arg).type)
       var signature = yogurt_signature(
         fun_.get(call.receiver).type.fun_.unwrap("You can only call funs."),
