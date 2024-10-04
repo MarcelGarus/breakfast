@@ -24,6 +24,7 @@ enum EggType {
   type,
   never,
   enum_: Map[String, Slice[EggType]],
+  recursive: Int,
 }
 
 struct EggFun {
@@ -51,6 +52,22 @@ fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
 fun hash(hasher: &Hasher, id: EggId) { hasher.hash(id.int) }
 
 fun get(code: EggCode, id: EggId): EggExpr { code.exprs.get(id.int) }
+
+| Naively compares types.
+fun ==(a: EggType, b: EggType): Bool {
+  switch a
+  case variable(var_a) if b is variable(var_b) then var_a == var_b else false
+  case int b is int
+  case string b is string
+  case type b is type
+  case never b is never
+  case enum_(enum_a)
+    if b is enum_(enum_b) then {
+      enum_a == enum_b
+    } else false
+  case recursive(level_a)
+    if b is recursive(level_b) then level_a == level_b else false
+}
 
 fun write[W](writer: W, egg: Egg) {
   var first = true
@@ -80,6 +97,7 @@ fun write[W](writer: W, type: EggType) {
     }
     writer.")"
   }
+  case recursive(level) writer."^{level}"
 }
 fun write[W](writer: W, id: EggId) { writer."@{id.int}" }
 fun write[W](writer: W, body: EggBody, code: EggCode, indentation: Int) {
@@ -118,6 +136,22 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
     for arg in tag.args do writer." {arg}"
   }
 }
+
+
+| Type Algorithms  
+| Turns out, some of the things we want to do with types are not trivial because
+| of recursive types. For example, joining these two enums results in a mess:
+|
+| | Foo (| Bar ^2) = | Foo (| Bar (| Foo (| Bar (...))))
+| | Foo ^1         = | Foo (| Foo (| Foo (| Foo (...))))
+|
+| The joined type is this:
+|
+| | Foo (| Foo (| Foo ^1) Bar (| Foo (| Bar ^2)))
+|
+| Basically, the top-level is always the Foo variant and the level below that
+| decides whether it is Foo forever or whether Foo and Bar alternate.
+
 
 | Variable Scoping  
 | Tracks which names are in scope using a simple vector:
@@ -185,44 +219,69 @@ fun to_egg(toast: Toast): Egg {
 }
 
 fun to_egg(type: ToastType, toast: Toast): EggType {
-  type.to_egg(toast, map[String, EggType]())
+  type.to_egg(toast, map[String, EggType](), list[OngoingTypeCall](), 0)
 }
-fun to_egg(type: ToastType, toast: Toast, env: Map[String, EggType]): EggType {
+struct OngoingTypeCall { depth: Int, name: String, args: Slice[EggType] }
+fun to_egg(
+  type: ToastType, toast: Toast, env: Map[String, EggType],
+  parent_calls: List[OngoingTypeCall], depth: Int,
+): EggType {
   switch type
   case variable(variable)
     if env.get_maybe(variable) is some(type)
     then type
     else EggType.variable(variable)
   case call(call) {
-    if call.name == "Int" then {
+    var name = call.name
+    
+    | Lower the arguments.
+    var args = list[EggType]()
+    for arg in call.args do
+      args.&.push(arg.to_egg(toast, env, parent_calls, depth))
+    var args = args.to_slice()
+
+    | Handle builtin types.
+    if name == "Int" then {
       call.args.is_empty() or panic("called Int with args")
       return EggType.int
     }
-    if call.name == "String" then {
+    if name == "String" then {
       call.args.is_empty() or panic("called String with args")
       return EggType.string
     }
-    if call.name == "Type" then {
+    if name == "Type" then {
       call.args.is_empty() or panic("called Type with args")
       return EggType.type
     }
+
+    | Are we recursively lowering a type? If so, we need to insert a recursive
+    | type instead of endlessly digging down into the type.
+    for call in parent_calls do
+      if call.name == name and call.args == args then
+        return EggType.recursive(depth - call.depth)
+
+    | Look for a user-defined type with the name.
     for def in toast.defs do
       if def is type(def) then
-        if def.name == call.name then {
+        if def.name == name then {
           var inner_env = map[String, EggType]()
-          def.params.len == call.args.len or
-            panic("tried to instantiate {def.name} with {call.args.len} args, but it needs {def.params.len}")
-          for both in zip(def.params.iter(), call.args.iter()) do
-            inner_env.&.put(both.a, both.b.to_egg(toast, env))
-          return def.type.to_egg(toast, inner_env)
+          def.params.len == args.len or
+            panic("tried to instantiate {def.name} with {args.len} args, but it needs {def.params.len}")
+          for both in zip(def.params.iter(), args.iter()) do
+            inner_env.&.put(both.a, both.b)
+          parent_calls.&.push(OngoingTypeCall { name, args, depth })
+          var type = def.type.to_egg(toast, inner_env, parent_calls, depth)
+          parent_calls.&.pop()
+          return type
         }
-    panic("{call.name} doesn't exist")
+    panic("{name} doesn't exist")
   }
   case enum_(enum_) {
     var variants = map[String, Slice[EggType]]()
     for variant in enum_ do {
       var args = list[EggType]()
-      for arg in variant.value do args.&.push(arg.to_egg(toast, env))
+      for arg in variant.value do
+        args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1))
       variants.&.put(variant.key, args.to_slice())
     }
     EggType.enum_(variants)

@@ -19,6 +19,7 @@ enum YogurtType {
   type,
   never,
   enum_: Map[String, Slice[YogurtType]],
+  recursive: Int,
 }
 
 struct YogurtValue { type: YogurtType, kind: YogurtValueKind }
@@ -45,19 +46,21 @@ struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
 fun ==(a: YogurtType, b: YogurtType): Bool {
   switch a
-  case int(a)    if b is int(b)    then a == b else false
-  case string(a) if b is string(b) then a == b else false
-  case type(a)   if b is type(b)   then a == b else false
-  case never(a)  if b is never(b)  then a == b else false
-  case enum_(a)  if b is enum_(b)  then a == b else false
+  case int(a)       if b is int(b)       then a == b else false
+  case string(a)    if b is string(b)    then a == b else false
+  case type(a)      if b is type(b)      then a == b else false
+  case never(a)     if b is never(b)     then a == b else false
+  case enum_(a)     if b is enum_(b)     then a == b else false
+  case recursive(a) if b is recursive(b) then a == b else false
 }
 fun hash(hasher: &Hasher, type: YogurtType) {
   switch type
-  case int             { hasher.hash(0) }
-  case string          { hasher.hash(1) }
-  case type            { hasher.hash(2) }
-  case never           { hasher.hash(3) }
-  case enum_(variants) { hasher.hash(4) }
+  case int       { hasher.hash(0) }
+  case string    { hasher.hash(1) }
+  case type      { hasher.hash(2) }
+  case never     { hasher.hash(3) }
+  case enum_     { hasher.hash(4) }
+  case recursive { hasher.hash(5) }
 }
 
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
@@ -117,7 +120,7 @@ fun write[W](
     for arg in tag.args do writer." {arg}"
   }
   case call(call) {
-    writer."call {call.receiver}"
+    writer."call \"{call.receiver}\""
     for arg in call.args do writer." {arg}"
   }
   case cast(id) writer."cast {id}"
@@ -140,6 +143,7 @@ fun write[W](writer: W, type: YogurtType) {
       for arg in variant.value do writer." {arg}"
     }
   }
+  case recursive(level) writer."^{level}"
 }
 fun write[W](writer: W, value: YogurtValue) {
   switch value.kind
@@ -156,40 +160,64 @@ fun write[W](writer: W, value: YogurtValue) {
 | Whenever a function is called, we need to choose the correct function based on
 | the name and argument types.
 
-fun lookup(egg: Egg, name: String, args: Slice[YogurtType]): EggFun {
+struct EggLookupResult { fun_: EggFun, env: Map[String, YogurtType] }
+fun lookup(egg: Egg, name: String, args: Slice[YogurtType]): EggLookupResult {
   var name_matches = list[EggFun]()
   for fun_ in egg.funs do
     if fun_.name == name then
       name_matches.&.push(fun_)
   if name_matches.is_empty() then panic("there is no function named {name}")
 
-  var full_matches = list[EggFun]()
+  var full_matches = list[Tuple2[EggFun, Map[String, YogurtType]]]()
   for fun_ in name_matches do {
     fun_.params.len == args.len or continue
 
-    var mapping = map[String, YogurtType]()
+    var env = map[String, YogurtType]()
     var works = true
     for both in zip(args.iter(), fun_.params.iter()) do {
-      var arg_mapping = both.a.is_assignable_to(both.b) or
+      var arg_env = both.a.is_assignable_to(both.b) or
         { works = false break }
-      for entry in arg_mapping do
-        if mapping.get_maybe(entry.key) is some(type)
+      for entry in arg_env do
+        if env.get_maybe(entry.key) is some(type)
         then {
           type == entry.value or { works = false break }
           {}
         }
-        else mapping.&.put(entry.key, entry.value)
+        else env.&.put(entry.key, entry.value)
     }
     if not(works) then continue
 
-    full_matches.&.push(fun_)
+    full_matches.&.push(tuple(fun_, env))
   }
 
   if full_matches.is_empty() then
     panic("there is no matching function named {name} for the args {args}")
   if full_matches.len > 1 then
     panic("multiple functions match {name} {args}")
-  full_matches.get(0)
+  var fun_and_env = full_matches.get(0)
+
+  EggLookupResult { fun_ = fun_and_env.a, env = fun_and_env.b }
+}
+
+fun specialize(type: EggType, env: Map[String, YogurtType]): YogurtType {
+  switch type
+  case variable(variable)
+    env.get_maybe(variable) or
+      panic("generic type {variable} not in type env {env}")
+  case int YogurtType.int
+  case string YogurtType.string
+  case type YogurtType.type
+  case never YogurtType.never
+  case enum_(enum_) {
+    var variants = map[String, Slice[YogurtType]]()
+    for variant in enum_ do {
+      var args = list[YogurtType]()
+      for arg in variant.value do args.&.push(arg.specialize(env))
+      variants.&.put(variant.key, args.to_slice())
+    }
+    YogurtType.enum_(variants)
+  }
+  case recursive(level) YogurtType.recursive(level)
 }
 
 | Checks if the concrete YogurtType is assignable to the EggType, possibly
@@ -251,6 +279,7 @@ fun is_assignable_to(
 
     some(mapping)
   }
+  case recursive todo()
 }
 
 | Convert Egg to Yogurt  
@@ -315,7 +344,7 @@ fun lookup(compiler: YogurtCodeCompiler, egg_id: EggId): YogurtId {
 fun to_yogurt(egg: Egg): Yogurt {
   var main = egg.lookup("main", list(YogurtType.int).to_slice())
   var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
-  main.to_yogurt(
+  main.fun_.to_yogurt(
     list(YogurtParam.runtime(YogurtType.int)).to_slice(),
     "main", egg, yogurt.&
   )
@@ -326,7 +355,19 @@ fun to_yogurt(
   egg: Egg, yogurt: &Yogurt
 ): YogurtFun {
   var signature = yogurt_signature(name, params)
+  if yogurt.funs.get_maybe(signature) is some(fun_) then return fun_
 
+  | Put a temporary placeholder in the Yogurt. Recursive calls won't analyze the
+  | content of that function anyway, they will just calculate the returned type
+  | based on the signature.
+  yogurt.funs.&.put(signature, YogurtFun {
+    exprs = empty_slice[YogurtExpr](),
+    body = YogurtBody {
+      params = empty_slice[YogurtId](),
+      exprs = empty_slice[YogurtId](),
+      returns = YogurtId { int = -1 },
+    }
+  })
   var fun_ =
     switch fun_.impl
     case code(code) {
@@ -477,10 +518,11 @@ fun to_yogurt(
     var arg_types = arg_types.to_slice()
     var arg_params = arg_params.to_slice()
 
-    var fun_ = compiler.egg.lookup(name, arg_types)
+    var result = compiler.egg.lookup(name, arg_types)
 
-    var fun_ = fun_.to_yogurt(arg_params, name, compiler.egg, compiler.yogurt)
-    var return_type = fun_.exprs.get(fun_.body.returns.int).type
+    result.fun_.to_yogurt(arg_params, name, compiler.egg, compiler.yogurt)
+    var return_type = result.fun_.return_type.specialize(result.env)
+
     YogurtOp.call(YogurtCall {
       receiver = yogurt_signature(name, arg_params), args
     }) $ return_type
@@ -551,6 +593,18 @@ fun to_yogurt(
       instruction = Instruction.add, args = list(a, b).to_slice()
     }) $ YogurtType.int)
   }
+  case sub {
+    var a = params.get(0)
+    var b = params.get(1)
+    if builder.get(a).op is comptime(a) then
+      if builder.get(b).op is comptime(b) then
+        return builder.&.push(yogurt_value_int(
+          a.kind.int.unwrap() - b.kind.int.unwrap()
+        ).to_expr())
+    builder.&.push(YogurtOp.instruction(YogurtInstruction {
+      instruction = Instruction.sub, args = list(a, b).to_slice()
+    }) $ YogurtType.int)
+  }
   case compare {
     var a = params.get(0)
     var b = params.get(1)
@@ -592,6 +646,7 @@ fun to_yogurt(
       case type "Type"
       case never "Never"
       case enum_ "Enum"
+      case recursive unreachable()
     builder.&.push(yogurt_value_symbol(symbol).to_expr())
   }
   case crash {
@@ -638,4 +693,5 @@ fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
     }
     default none[YogurtType]()
   }
+  case recursive(level) todo("join recursive type")
 }

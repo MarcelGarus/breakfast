@@ -42,6 +42,7 @@ fun mangle[W](writer: W, type: YogurtType) {
     }
     if variants.size != 1 then writer."_end_"
   }
+  case recursive(level) writer."rec_{level}"
 }
 fun mangle(str: String): String {
   var b = string_builder().&
@@ -86,6 +87,7 @@ fun to_c(yogurt: Yogurt): CCode {
       b."    \} as;\n
         '\} {mangled};"
     }
+    case recursive(level) b."// TODO: handle recursive types"
     b."\n"
   }
 
@@ -187,7 +189,15 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       writer."\}\n"
     }
     case tag(tag) {
-      writer."TODO: Initialize tag\n"
+      var index = 0
+      for variant in expr.type.enum_.unwrap().iter().&.enumerate() do
+        if variant.item.key == tag.symbol then index = variant.index
+      for i in 0..indentation do writer."    "
+      writer."{id.mangle()}.tag = {index};\n"
+      for arg in tag.args.iter().enumerate() do {
+        for i in 0..indentation do writer."    "
+        writer."{id.mangle()}.as.{tag.symbol}._{arg.index} = {arg.item.mangle()};\n"
+      }
     }
     case call(call) {
       for i in 0..indentation do writer."    "
@@ -251,7 +261,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
           '{id.mangle()}.tag = 2;\n"
       }
       case concat {
-        writer."// TODO: implement concat"
+        writer."TODO: implement concat"
       }
       case crash {
         writer."for (int i = 0; i < {args.get(0).mangle()}.len; i++)\n"

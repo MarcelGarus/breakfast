@@ -1,13 +1,50 @@
-compare a b = builtin_compare a b
-crash message = builtin_crash message
+Bool =
+  |
+    True
+    False
 
-less a b =
-  % compare a b
-    Less: True
-    Equal: False
+Maybe t =
+  |
+    Some t
+    None
+
+List t =
+  |
+    Empty
+    More t (List t)
+
++ a: Int b: Int -> Int = builtin_add a b
+- a: Int b: Int -> Int = builtin_sub a b
++ a: String b: String -> String = builtin_concat a b
+equals a: Int b: Int -> Bool =
+  % builtin_compare a b
+    Less: False
+    Equal: True
     Greater: False
 
-main a =
-  % less a 5
-    True: "smol a"
-    False: crash "too big!"
+list item: t -> (List t) = More item Empty
+
+get list: (List t) index: Int -> t =
+  5
+
+main list: (List Int) -> Bool =
+  True
+
+not bool: Bool -> Bool =
+  % bool
+    True: False
+    False: True
+
+make_list len: Int -> (List Int) =
+  % equals len 0
+    True: Empty
+    False:
+      More
+        len
+        make_list
+          -
+            len
+            1
+
+main a: Int -> Int =
+  make_list a
