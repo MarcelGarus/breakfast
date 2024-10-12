@@ -5,6 +5,7 @@ import toast.mar
 import egg.mar
 import yogurt.mar
 import c.mar
+import type.mar
 
 | Compiler Stages:
 | - Bacon

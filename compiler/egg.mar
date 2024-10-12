@@ -17,18 +17,9 @@ import breakfast.mar
 
 struct Egg { funs: List[EggFun] }
 
-enum EggType {
-  variable: String,
-  int,
-  string,
-  type,
-  never,
-  enum_: Map[String, Slice[EggType]],
-  recursive: Int,
-}
-
 struct EggFun {
-  name: String, params: Slice[EggType], return_type: EggType, impl: EggFunImpl
+  name: String, params: Slice[BreakfastType], return_type: BreakfastType,
+  impl: EggFunImpl
 }
 enum EggFunImpl { code: EggCode, builtin: Builtin }
 struct EggCode { exprs: Slice[EggExpr], body: EggBody }
@@ -53,22 +44,6 @@ fun hash(hasher: &Hasher, id: EggId) { hasher.hash(id.int) }
 
 fun get(code: EggCode, id: EggId): EggExpr { code.exprs.get(id.int) }
 
-| Naively compares types.
-fun ==(a: EggType, b: EggType): Bool {
-  switch a
-  case variable(var_a) if b is variable(var_b) then var_a == var_b else false
-  case int b is int
-  case string b is string
-  case type b is type
-  case never b is never
-  case enum_(enum_a)
-    if b is enum_(enum_b) then {
-      enum_a == enum_b
-    } else false
-  case recursive(level_a)
-    if b is recursive(level_b) then level_a == level_b else false
-}
-
 fun write[W](writer: W, egg: Egg) {
   var first = true
   for fun_ in egg.funs do {
@@ -80,24 +55,6 @@ fun write[W](writer: W, egg: Egg) {
     case code(code) writer.write(code.body, code, 1)
     case builtin(builtin) writer." ..."
   }
-}
-fun write[W](writer: W, type: EggType) {
-  switch type
-  case variable(variable) writer."{variable}"
-  case int writer."Int"
-  case string writer."String"
-  case type writer."Type"
-  case never writer."Never"
-  case enum_(variants) {
-    writer."(|"
-    for variant in variants do {
-      writer." ({variant.key}"
-      for arg in variant.value do writer." {arg}"
-      writer.")"
-    }
-    writer.")"
-  }
-  case recursive(level) writer."^{level}"
 }
 fun write[W](writer: W, id: EggId) { writer."@{id.int}" }
 fun write[W](writer: W, body: EggBody, code: EggCode, indentation: Int) {
@@ -192,7 +149,7 @@ fun to_egg(toast: Toast): Egg {
       funs.&.push(EggFun {
         name = fun_.name,
         params = {
-          var params = list[EggType]()
+          var params = list[BreakfastType]()
           for param in fun_.params do
             params.&.push(param.type.to_egg(toast))
           params.to_slice()
@@ -218,24 +175,24 @@ fun to_egg(toast: Toast): Egg {
   Egg { funs }
 }
 
-fun to_egg(type: ToastType, toast: Toast): EggType {
-  type.to_egg(toast, map[String, EggType](), list[OngoingTypeCall](), 0)
+fun to_egg(type: ToastType, toast: Toast): BreakfastType {
+  type.to_egg(toast, map[String, BreakfastType](), list[OngoingTypeCall](), 0)
 }
-struct OngoingTypeCall { depth: Int, name: String, args: Slice[EggType] }
+struct OngoingTypeCall { depth: Int, name: String, args: Slice[BreakfastType] }
 fun to_egg(
-  type: ToastType, toast: Toast, env: Map[String, EggType],
+  type: ToastType, toast: Toast, env: Map[String, BreakfastType],
   parent_calls: List[OngoingTypeCall], depth: Int,
-): EggType {
+): BreakfastType {
   switch type
   case variable(variable)
     if env.get_maybe(variable) is some(type)
     then type
-    else EggType.variable(variable)
+    else BreakfastType.primitive(variable)
   case call(call) {
     var name = call.name
     
     | Lower the arguments.
-    var args = list[EggType]()
+    var args = list[BreakfastType]()
     for arg in call.args do
       args.&.push(arg.to_egg(toast, env, parent_calls, depth))
     var args = args.to_slice()
@@ -243,28 +200,28 @@ fun to_egg(
     | Handle builtin types.
     if name == "Int" then {
       call.args.is_empty() or panic("called Int with args")
-      return EggType.int
+      return type_int
     }
     if name == "String" then {
       call.args.is_empty() or panic("called String with args")
-      return EggType.string
+      return type_string
     }
     if name == "Type" then {
       call.args.is_empty() or panic("called Type with args")
-      return EggType.type
+      return type_type
     }
 
     | Are we recursively lowering a type? If so, we need to insert a recursive
     | type instead of endlessly digging down into the type.
     for call in parent_calls do
       if call.name == name and call.args == args then
-        return EggType.recursive(depth - call.depth)
+        return BreakfastType.recursive(depth - call.depth)
 
     | Look for a user-defined type with the name.
     for def in toast.defs do
       if def is type(def) then
         if def.name == name then {
-          var inner_env = map[String, EggType]()
+          var inner_env = map[String, BreakfastType]()
           def.params.len == args.len or
             panic("tried to instantiate {def.name} with {args.len} args, but it needs {def.params.len}")
           for both in zip(def.params.iter(), args.iter()) do
@@ -277,43 +234,28 @@ fun to_egg(
     panic("{name} doesn't exist")
   }
   case enum_(enum_) {
-    var variants = map[String, Slice[EggType]]()
+    var variants = map[String, Slice[BreakfastType]]()
     for variant in enum_ do {
-      var args = list[EggType]()
+      var args = list[BreakfastType]()
       for arg in variant.value do
         args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1))
       variants.&.put(variant.key, args.to_slice())
     }
-    EggType.enum_(variants)
+    BreakfastType.enum_(variants)
   }
 }
 
 fun create_builtin_fun(builtin: Builtin): EggFun {
   var signature =
     switch builtin
-    case add tuple(list(EggType.int, EggType.int), EggType.int)
-    case sub tuple(list(EggType.int, EggType.int), EggType.int)
-    case mul tuple(list(EggType.int, EggType.int), EggType.int)
-    case div tuple(list(EggType.int, EggType.int), EggType.int)
-    case compare tuple(
-      list(EggType.int, EggType.int),
-      EggType.enum_(map(
-        "Less"    -> empty_slice[EggType](),
-        "Equal"   -> empty_slice[EggType](),
-        "Greater" -> empty_slice[EggType](),
-      ))
-    )
-    case concat tuple(list(EggType.string, EggType.string), EggType.string)
-    case type_info tuple(
-      list(EggType.type),
-      EggType.enum_(map(
-        "Int"    -> empty_slice[EggType](),
-        "String" -> empty_slice[EggType](),
-        "Type"   -> empty_slice[EggType](),
-        "Enum"   -> empty_slice[EggType](),
-      ))
-    )
-    case crash tuple(list(EggType.string), EggType.never)
+    case add tuple(list(type_int, type_int), type_int)
+    case sub tuple(list(type_int, type_int), type_int)
+    case mul tuple(list(type_int, type_int), type_int)
+    case div tuple(list(type_int, type_int), type_int)
+    case compare tuple(list(type_int, type_int), type_ordering)
+    case concat tuple(list(type_string, type_string), type_string)
+    case type_info tuple(list(type_type), type_type_info)
+    case crash tuple(list(type_string), type_never)
   EggFun {
     name = "builtin_{builtin}",
     params = signature.a.to_slice(),

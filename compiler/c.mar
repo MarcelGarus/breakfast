@@ -6,8 +6,8 @@ struct CCode { code: String }
 
 fun write[W](writer: W, c: CCode) { writer."{c.code}" }
 
-fun collect_types(yogurt: Yogurt): Set[YogurtType] {
-  var types = set[YogurtType]()
+fun collect_types(yogurt: Yogurt): Set[BreakfastType] {
+  var types = set[BreakfastType]()
   for fun_ in yogurt.funs do {
     for expr in fun_.value.exprs do {
       var type = expr.type
@@ -17,17 +17,15 @@ fun collect_types(yogurt: Yogurt): Set[YogurtType] {
   types
 }
 
-fun mangle(type: YogurtType): String {
+fun mangle(type: BreakfastType): String {
   var b = string_builder().&
   b."Type_"
   b.mangle(type)
   b.to_string()
 }
-fun mangle[W](writer: W, type: YogurtType) {
+fun mangle[W](writer: W, type: BreakfastType) {
   switch type
-  case int writer."int"
-  case string writer."string"
-  case type writer."type"
+  case primitive(name) writer."{name}"
   case never writer."never"
   case enum_(variants) {
     if variants.size != 1 then writer."enum_of_"
@@ -70,9 +68,13 @@ fun to_c(yogurt: Yogurt): CCode {
     b."\n// {type}\n"
     var mangled = type.mangle()
     switch type
-    case int b."typedef int64_t {mangled};"
-    case string b."typedef struct \{ char* data; size_t len; \} {mangled};"
-    case type b."typedef struct \{\} {mangled};"
+    case primitive(name) {
+      if name == "Int" then b."typedef int64_t {mangled};"
+      else if name == "String" then
+        b."typedef struct \{ char* data; size_t len; \} {mangled};"
+      else if name == "Type" then b."typedef struct \{\} {mangled};"
+      else todo("implement primitive {name}")
+    }
     case never b."typedef struct \{\} {mangled};"
     case enum_(variants) {
       b."typedef struct \{\n
@@ -201,7 +203,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
     }
     case call(call) {
       for i in 0..indentation do writer."    "
-      var arg_types = list[YogurtType]()
+      var arg_types = list[BreakfastType]()
       for arg in call.args do arg_types.&.push(fun_.get(arg).type)
       writer."{id.mangle()} = {call.receiver.str.mangle()}("
       var first = true
@@ -219,8 +221,6 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
 
       for i in 0..indentation do writer."    "
       switch target_type
-      case int unreachable()
-      case string unreachable()
       case enum_(target_variants) {
         writer."switch ({cast.mangle()}.tag) \{\n"
         for variant in source_type.enum_.unwrap().iter().&.enumerate()

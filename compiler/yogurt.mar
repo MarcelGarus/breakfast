@@ -4,29 +4,20 @@ import breakfast.mar
 
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: String }
-enum YogurtParam { runtime: YogurtType, comptime: YogurtValue }
+enum YogurtParam { runtime: BreakfastType, comptime: YogurtValue }
 
 struct YogurtFun { exprs: Slice[YogurtExpr], body: YogurtBody }
 struct YogurtId { int: Int }
 struct YogurtBody {
   params: Slice[YogurtId], exprs: Slice[YogurtId], returns: YogurtId
 }
-struct YogurtExpr { op: YogurtOp, type: YogurtType }
+struct YogurtExpr { op: YogurtOp, type: BreakfastType }
 
-enum YogurtType {
-  int,
-  string,
-  type,
-  never,
-  enum_: Map[String, Slice[YogurtType]],
-  recursive: Int,
-}
-
-struct YogurtValue { type: YogurtType, kind: YogurtValueKind }
+struct YogurtValue { type: BreakfastType, kind: YogurtValueKind }
 enum YogurtValueKind {
   int: Int,
   string: String,
-  type: YogurtType,
+  type: BreakfastType,
   tag: Tuple2[String, Slice[YogurtValue]],
 }
 
@@ -44,25 +35,6 @@ struct YogurtTag { symbol: String, args: Slice[YogurtId] }
 struct YogurtCall { receiver: YogurtSignature, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
-fun ==(a: YogurtType, b: YogurtType): Bool {
-  switch a
-  case int(a)       if b is int(b)       then a == b else false
-  case string(a)    if b is string(b)    then a == b else false
-  case type(a)      if b is type(b)      then a == b else false
-  case never(a)     if b is never(b)     then a == b else false
-  case enum_(a)     if b is enum_(b)     then a == b else false
-  case recursive(a) if b is recursive(b) then a == b else false
-}
-fun hash(hasher: &Hasher, type: YogurtType) {
-  switch type
-  case int       { hasher.hash(0) }
-  case string    { hasher.hash(1) }
-  case type      { hasher.hash(2) }
-  case never     { hasher.hash(3) }
-  case enum_     { hasher.hash(4) }
-  case recursive { hasher.hash(5) }
-}
-
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
 fun yogurt_signature(
@@ -71,7 +43,7 @@ fun yogurt_signature(
   var b = string_builder().&
   b."{name}"
   for param in params do
-    b." {switch param case comptime(val) "{val}" case runtime(type) "{type}"}"
+    b." {switch param case comptime(val) "{val}:{val.type}" case runtime(type) "{type}"}"
   YogurtSignature { str = b.to_string() }
 }
 fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
@@ -129,22 +101,6 @@ fun write[W](
     for arg in instruction.args do writer." {arg}"
   }
 }
-fun write[W](writer: W, type: YogurtType) {
-  switch type
-  case int writer."Int"
-  case string writer."String"
-  case type writer."Type"
-  case never writer."Never"
-  case enum_(variants) {
-    var first = true
-    for variant in variants do {
-      if first then first = false else writer." | "
-      writer."{variant.key}"
-      for arg in variant.value do writer." {arg}"
-    }
-  }
-  case recursive(level) writer."^{level}"
-}
 fun write[W](writer: W, value: YogurtValue) {
   switch value.kind
   case int(int) writer."{int}"
@@ -160,131 +116,42 @@ fun write[W](writer: W, value: YogurtValue) {
 | Whenever a function is called, we need to choose the correct function based on
 | the name and argument types.
 
-struct EggLookupResult { fun_: EggFun, env: Map[String, YogurtType] }
-fun lookup(egg: Egg, name: String, args: Slice[YogurtType]): EggLookupResult {
+struct EggLookupResult { fun_: EggFun, substitutions: Substitutions }
+fun lookup(egg: Egg, name: String, args: Slice[BreakfastType]): EggLookupResult {
   var name_matches = list[EggFun]()
   for fun_ in egg.funs do
     if fun_.name == name then
       name_matches.&.push(fun_)
   if name_matches.is_empty() then panic("there is no function named {name}")
 
-  var full_matches = list[Tuple2[EggFun, Map[String, YogurtType]]]()
+  var full_matches = list[Tuple2[EggFun, Substitutions]]()
   for fun_ in name_matches do {
     fun_.params.len == args.len or continue
-
-    var env = map[String, YogurtType]()
-    var works = true
-    for both in zip(args.iter(), fun_.params.iter()) do {
-      var arg_env = both.a.is_assignable_to(both.b) or
-        { works = false break }
-      for entry in arg_env do
-        if env.get_maybe(entry.key) is some(type)
-        then {
-          type == entry.value or { works = false break }
-          {}
-        }
-        else env.&.put(entry.key, entry.value)
-    }
-    if not(works) then continue
-
-    full_matches.&.push(tuple(fun_, env))
+    var substitutions = args.match_against(fun_.params) or continue
+    full_matches.&.push(tuple(fun_, substitutions))
   }
 
   if full_matches.is_empty() then
     panic("there is no matching function named {name} for the args {args}")
   if full_matches.len > 1 then
-    panic("multiple functions match {name} {args}")
-  var fun_and_env = full_matches.get(0)
+    panic({
+      var b = string_builder().&
+      b."multiple functions match {name} {args}:"
+      for match in full_matches do
+        b."\n  {match.a.name} {match.a.params}  (with {match.b.debug()})"
+      b.to_string()
+    })
+  var fun_and_substitutions = full_matches.get(0)
 
-  EggLookupResult { fun_ = fun_and_env.a, env = fun_and_env.b }
-}
-
-fun specialize(type: EggType, env: Map[String, YogurtType]): YogurtType {
-  switch type
-  case variable(variable)
-    env.get_maybe(variable) or
-      panic("generic type {variable} not in type env {env}")
-  case int YogurtType.int
-  case string YogurtType.string
-  case type YogurtType.type
-  case never YogurtType.never
-  case enum_(enum_) {
-    var variants = map[String, Slice[YogurtType]]()
-    for variant in enum_ do {
-      var args = list[YogurtType]()
-      for arg in variant.value do args.&.push(arg.specialize(env))
-      variants.&.put(variant.key, args.to_slice())
-    }
-    YogurtType.enum_(variants)
+  EggLookupResult {
+    fun_          = fun_and_substitutions.a,
+    substitutions = fun_and_substitutions.b,
   }
-  case recursive(level) YogurtType.recursive(level)
-}
-
-| Checks if the concrete YogurtType is assignable to the EggType, possibly
-| containing type variables. Returns a map of what values the type variables
-| need to have for the mapping to succeed.
-|
-| Int            -> Int           ? {}
-| Int            -> String        ? -
-| Int            -> t             ? {t: Int}
-| List Int       -> List t        ? {t: Int}
-| Map Int String -> Map t t       ? -
-| Never          -> Int           ? {}  (doesn't work like this yet)
-| Never          -> List t        ? {}  (doesn't work like this yet)
-| Never          -> Never         ? {}
-| | Foo Bar      -> | Foo Bar Baz ? {}
-fun is_assignable_to(
-  yogurt: YogurtType, egg: EggType
-): Maybe[Map[String, YogurtType]] {
-  switch egg
-  case variable(v) some(map(v -> yogurt))
-  case int
-    if yogurt is int
-    then some(map[String, YogurtType]())
-    else none[Map[String, YogurtType]]()
-  case string
-    if yogurt is string
-    then some(map[String, YogurtType]())
-    else none[Map[String, YogurtType]]()
-  case type
-    if yogurt is type
-    then some(map[String, YogurtType]())
-    else none[Map[String, YogurtType]]()
-  case never
-    if yogurt is never
-    then some(map[String, YogurtType]())
-    else none[Map[String, YogurtType]]()
-  case enum_(egg_variants) {
-    var yogurt_variants = yogurt.enum_ or return none[Map[String, YogurtType]]()
-    var mapping = map[String, YogurtType]()
-
-    for variant in yogurt_variants do {
-      var yogurt_args = variant.value
-      var egg_args = egg_variants.get_maybe(variant.key) or
-        return none[Map[String, YogurtType]]()
-      yogurt_args.len == egg_args.len or return none[Map[String, YogurtType]]()
-  
-      for both in zip(yogurt_args.iter(), egg_args.iter()) do {
-        var arg_mapping = both.a.is_assignable_to(both.b) or
-          return none[Map[String, YogurtType]]()
-        for entry in arg_mapping do
-          if mapping.get_maybe(entry.key) is some(type)
-          then {
-            type == entry.value or return none[Map[String, YogurtType]]()
-            {}
-          }
-          else mapping.&.put(entry.key, entry.value)
-      }
-    }
-
-    some(mapping)
-  }
-  case recursive todo()
 }
 
 | Convert Egg to Yogurt  
 
-fun $(op: YogurtOp, type: YogurtType): _ { YogurtExpr { op, type } }
+fun $(op: YogurtOp, type: BreakfastType): _ { YogurtExpr { op, type } }
 fun to_expr(value: YogurtValue): _ { YogurtOp.comptime(value) $ value.type }
 fun to_expr(param: YogurtParam): YogurtExpr {
   switch param
@@ -292,23 +159,18 @@ fun to_expr(param: YogurtParam): YogurtExpr {
   case runtime(type) YogurtOp.param $ type
 }
 
-var yogurt_type_ordering = YogurtType.enum_(map(
-  "Less"    -> empty_slice[YogurtType](),
-  "Equal"   -> empty_slice[YogurtType](),
-  "Greater" -> empty_slice[YogurtType](),
-))
 fun yogurt_value_int(int: Int): _ {
-  YogurtValue { type = YogurtType.int, kind = YogurtValueKind.int(int) }
+  YogurtValue { type = type_int, kind = YogurtValueKind.int(int) }
 }
 fun yogurt_value_string(string: String): _ {
-  YogurtValue { type = YogurtType.string, kind = YogurtValueKind.string(string) }
+  YogurtValue { type = type_string, kind = YogurtValueKind.string(string) }
 }
-fun yogurt_value_type(type: YogurtType): _ {
-  YogurtValue { type = YogurtType.type, kind = YogurtValueKind.type(type) }
+fun yogurt_value_type(type: BreakfastType): _ {
+  YogurtValue { type = type_type, kind = YogurtValueKind.type(type) }
 }
 fun yogurt_value_symbol(symbol: String): _ {
   YogurtValue {
-    type = YogurtType.enum_(map(symbol -> empty_slice[YogurtType]())),
+    type = BreakfastType.enum_(map(symbol -> empty_slice[BreakfastType]())),
     kind = YogurtValueKind.tag(tuple(symbol, empty_slice[YogurtValue]())),
   }
 }
@@ -342,20 +204,21 @@ fun lookup(compiler: YogurtCodeCompiler, egg_id: EggId): YogurtId {
 }
 
 fun to_yogurt(egg: Egg): Yogurt {
-  var main = egg.lookup("main", list(YogurtType.int).to_slice())
+  var main = egg.lookup("main", list(type_int).to_slice())
   var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
   main.fun_.to_yogurt(
-    list(YogurtParam.runtime(YogurtType.int)).to_slice(),
+    list(YogurtParam.runtime(type_int)).to_slice(),
     "main", egg, yogurt.&
   )
   yogurt
 }
 fun to_yogurt(
-  fun_: EggFun, params: Slice[YogurtParam], name: String,
+  egg_fun: EggFun, params: Slice[YogurtParam], name: String,
   egg: Egg, yogurt: &Yogurt
 ): YogurtFun {
   var signature = yogurt_signature(name, params)
   if yogurt.funs.get_maybe(signature) is some(fun_) then return fun_
+  println("Compiling {signature}")
 
   | Put a temporary placeholder in the Yogurt. Recursive calls won't analyze the
   | content of that function anyway, they will just calculate the returned type
@@ -369,7 +232,7 @@ fun to_yogurt(
     }
   })
   var fun_ =
-    switch fun_.impl
+    switch egg_fun.impl
     case code(code) {
       var builder = yogurt_fun_builder()
       var compiler = YogurtCodeCompiler {
@@ -379,6 +242,22 @@ fun to_yogurt(
       YogurtFun { exprs = builder.exprs.to_slice(), body }
     }
     case builtin(builtin) builtin.to_yogurt(params, egg, yogurt)
+
+  { | Check that the return type matches what the function claims it is.
+    var param_types = list[BreakfastType]()
+    for param in params do param_types.&.push(
+      switch param case comptime(val) val.type case runtime(type) type
+    )
+    var substitutions =
+      param_types.to_slice().match_against(egg_fun.params).unwrap()
+    var claimed_return_type = egg_fun.return_type.specialize(substitutions)
+    var actual_return_type = fun_.get(fun_.body.returns).type
+    actual_return_type.is_assignable_to(claimed_return_type) or
+      panic("return types don't match:\n
+        'claimed type: {claimed_return_type}\n
+        ' actual type: {actual_return_type}")
+  }
+  println("Done compiling {signature}")
 
   yogurt.funs.&.put(signature, fun_)
   fun_
@@ -421,7 +300,7 @@ fun to_yogurt(
   case switch_(switch_) {
     var condition = compiler.lookup(switch_.condition)
     var condition_expr = builder.get(condition)
-    var condition_type = condition_expr.type
+    var condition_type = condition_expr.type.extend_one_level()
     var condition_variants = condition_type.enum_
       or panic("switched on non-enum: {condition_type}")
 
@@ -455,7 +334,7 @@ fun to_yogurt(
     } else {
       | Lower all cases.
       var cases = map[String, YogurtBody]()
-      var case_types = list[YogurtType]()
+      var case_types = list[BreakfastType]()
       for variant in condition_variants do {
         var case_ = switch_.cases.get(variant.key)
         var params = list[YogurtParam]()
@@ -501,7 +380,7 @@ fun to_yogurt(
   case call(call) {
     var name = call.receiver
     var args = list[YogurtId]()
-    var arg_types = list[YogurtType]()
+    var arg_types = list[BreakfastType]()
     var arg_params = list[YogurtParam]()
     for arg in call.args do {
       var arg = compiler.lookup(arg)
@@ -521,7 +400,7 @@ fun to_yogurt(
     var result = compiler.egg.lookup(name, arg_types)
 
     result.fun_.to_yogurt(arg_params, name, compiler.egg, compiler.yogurt)
-    var return_type = result.fun_.return_type.specialize(result.env)
+    var return_type = result.fun_.return_type.specialize(result.substitutions)
 
     YogurtOp.call(YogurtCall {
       receiver = yogurt_signature(name, arg_params), args
@@ -531,7 +410,7 @@ fun to_yogurt(
     var symbol = tag.symbol
     
     var args = list[YogurtId]()
-    var arg_types = list[YogurtType]()
+    var arg_types = list[BreakfastType]()
     for arg in tag.args do {
       var arg = compiler.lookup(arg)
       var type = builder.get(arg).type
@@ -542,7 +421,7 @@ fun to_yogurt(
     var arg_types = arg_types.to_slice()
 
     YogurtOp.tag(YogurtTag { symbol, args })
-      $ YogurtType.enum_(map(symbol -> arg_types))
+      $ BreakfastType.enum_(map(symbol -> arg_types))
   }
 }
 
@@ -591,7 +470,7 @@ fun to_yogurt(
         ).to_expr())
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
       instruction = Instruction.add, args = list(a, b).to_slice()
-    }) $ YogurtType.int)
+    }) $ type_int)
   }
   case sub {
     var a = params.get(0)
@@ -603,7 +482,7 @@ fun to_yogurt(
         ).to_expr())
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
       instruction = Instruction.sub, args = list(a, b).to_slice()
-    }) $ YogurtType.int)
+    }) $ type_int)
   }
   case compare {
     var a = params.get(0)
@@ -620,7 +499,7 @@ fun to_yogurt(
     builder.&.push(
       YogurtOp.instruction(YogurtInstruction {
         instruction = Instruction.compare, args = list(a, b).to_slice()
-      }) $ yogurt_type_ordering
+      }) $ type_ordering
     )
   }
   case concat {
@@ -634,16 +513,14 @@ fun to_yogurt(
 
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
       instruction = Instruction.concat, args = list(a, b).to_slice()
-    }) $ YogurtType.string)
+    }) $ type_string)
   }
   case type_info {
     var type = builder.get(params.get(0)).op.comptime or
       panic("type_info called on Type that's not comptime")
     var symbol =
       switch type.kind.type.unwrap()
-      case int "Int"
-      case string "String"
-      case type "Type"
+      case primitive(name) "{name}"
       case never "Never"
       case enum_ "Enum"
       case recursive unreachable()
@@ -654,44 +531,8 @@ fun to_yogurt(
     builder.&.push(
       YogurtOp.instruction(YogurtInstruction {
         instruction = Instruction.crash, args = list(message).to_slice()
-      }) $ YogurtType.never
+      }) $ BreakfastType.never
     )
   }
   default todo("implement builtin {builtin}")
-}
-
-fun join(types: Slice[YogurtType]): Maybe[YogurtType] {
-  var common = types.get(0)
-  for type in types.without_first() do
-    common = join(common, type) or return none[YogurtType]()
-  some(common)
-}
-fun join(a: YogurtType, b: YogurtType): Maybe[YogurtType] {
-  if a is never then return some(b)
-  if b is never then return some(a)
-
-  switch a
-  case int if b is int then some(YogurtType.int) else none[YogurtType]()
-  case string if b is string then some(YogurtType.string) else none[YogurtType]()
-  case type if b is type then some(YogurtType.type) else none[YogurtType]()
-  case never unreachable()
-  case enum_(a_variants) {
-    switch b
-    case enum_(b_variants) {
-      var variants = map[String, Slice[YogurtType]]()
-      for variant in a_variants do variants.&.put(variant.key, variant.value)
-      for variant in b_variants do {
-        if variants.get_maybe(variant.key) is some(a_args) then {
-          var args = list[YogurtType]()
-          for both in zip(a_args.iter(), variant.value.iter()) do
-            args.&.push(join(both.a, both.b) or return none[YogurtType]())
-          variants.&.put(variant.key, args.to_slice())
-        } else
-          variants.&.put(variant.key, variant.value)
-      }
-      some(YogurtType.enum_(variants))
-    }
-    default none[YogurtType]()
-  }
-  case recursive(level) todo("join recursive type")
 }

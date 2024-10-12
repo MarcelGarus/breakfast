@@ -1,7 +1,20 @@
++ a: Int b: Int -> Int = builtin_add a b
+- a: Int b: Int -> Int = builtin_sub a b
++ a: String b: String -> String = builtin_concat a b
+equals a: Int b: Int -> Bool =
+  % builtin_compare a b
+    Less: False
+    Equal: True
+    Greater: False
+
 Bool =
   |
     True
     False
+not bool: Bool -> Bool =
+  % bool
+    True: False
+    False: True
 
 Maybe t =
   |
@@ -12,39 +25,45 @@ List t =
   |
     Empty
     More t (List t)
-
-+ a: Int b: Int -> Int = builtin_add a b
-- a: Int b: Int -> Int = builtin_sub a b
-+ a: String b: String -> String = builtin_concat a b
-equals a: Int b: Int -> Bool =
-  % builtin_compare a b
-    Less: False
-    Equal: True
-    Greater: False
-
-list item: t -> (List t) = More item Empty
-
-get list: (List t) index: Int -> t =
-  5
-
-main list: (List Int) -> Bool =
-  True
-
-not bool: Bool -> Bool =
-  % bool
-    True: False
-    False: True
+list a: t -> (List t) = More a Empty
+list a: t b: t -> (List t) =
+  More
+    a
+    list b
+list a: t b: t c: t -> (List t) =
+  More
+    a
+    list b c
+len list: (List t) -> Int =
+  % list
+    Empty: 0
+    More item rest:
+      +
+        len rest
+        1
+get_maybe list: (List t) index: Int -> (Maybe t) =
+  % list
+    Empty: None
+    More item rest:
+      % equals index 0
+        True: Some item
+        False:
+          get_maybe
+            rest
+            - index 1
 
 make_list len: Int -> (List Int) =
   % equals len 0
     True: Empty
     False:
       More
-        len
+        0
         make_list
           -
             len
             1
 
 main a: Int -> Int =
-  make_list a
+  l = list 1 2 3
+  len l
+
