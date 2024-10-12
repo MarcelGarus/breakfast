@@ -64,33 +64,42 @@ fun to_c(yogurt: Yogurt): CCode {
     '\n
     '// Types:\n"
 
-  for type in yogurt.collect_types() do {
+  var types = yogurt.collect_types()
+
+  for type in types do b."struct {type.mangle()};\n"
+  for type in types do b."typedef struct {type.mangle()} {type.mangle()};\n"
+  b."\n"
+
+  for type in types do {
     b."\n// {type}\n"
-    var mangled = type.mangle()
-    switch type
+    b."struct {type.mangle()} \{\n"
+    switch type.extend_one_level()
     case primitive(name) {
-      if name == "Int" then b."typedef int64_t {mangled};"
+      if name == "Int" then
+        b."    int64_t value;\n"
       else if name == "String" then
-        b."typedef struct \{ char* data; size_t len; \} {mangled};"
-      else if name == "Type" then b."typedef struct \{\} {mangled};"
+        b."    char* data;\n
+          '    size_t len;\n"
+      else if name == "Type" then {}
       else todo("implement primitive {name}")
     }
-    case never b."typedef struct \{\} {mangled};"
+    case never {}
     case enum_(variants) {
-      b."typedef struct \{\n
-        '    uint8_t tag; // {variants}\n
-        '    union \{\n"
+      b."    uint8_t tag; //"
+      for variant in variants.iter().&.enumerate() do
+        b." {variant.index} = {variant.item.key}"
+      b."\n"
+      b."    union \{\n"
       for variant in variants do {
         b."        struct \{ "
         for arg in variant.value.iter().&.enumerate() do
-          b."{arg.item.mangle()} _{arg.index}; "
+          b."{arg.item.mangle()}* _{arg.index}; "
         b."\} {variant.key.mangle()};\n"
       }
-      b."    \} as;\n
-        '\} {mangled};"
+      b."    \} as;\n"
     }
     case recursive(level) b."// TODO: handle recursive types"
-    b."\n"
+    b."\};\n"
   }
 
   b."\n// Function declarations:\n\n"
@@ -100,12 +109,12 @@ fun to_c(yogurt: Yogurt): CCode {
     var fun_ = fun_.value
 
     var return_type = fun_.get(fun_.body.returns).type
-    b."{return_type.mangle()} {signature.str.mangle()}("
+    b."{return_type.mangle()}* {signature.str.mangle()}("
 
     var first = true
     for param in fun_.body.params do {
       if first then first = false else b.", "
-      b."{fun_.get(param).type.mangle()} {param.mangle()}"
+      b."{fun_.get(param).type.mangle()}* {param.mangle()}"
     }
     b.");\n"
   }
@@ -116,13 +125,15 @@ fun to_c(yogurt: Yogurt): CCode {
     var signature = fun_.key
     var fun_ = fun_.value
 
+    b."// {signature}\n"
+
     var return_type = fun_.get(fun_.body.returns).type
-    b."{return_type.mangle()} {signature.str.mangle()}("
+    b."{return_type.mangle()}* {signature.str.mangle()}("
 
     var first = true
     for param in fun_.body.params do {
       if first then first = false else b.", "
-      b."{fun_.get(param).type.mangle()} {param.mangle()}"
+      b."{fun_.get(param).type.mangle()}* {param.mangle()}"
     }
     b.") \{\n"
     fun_.body.to_c(fun_, b, 1)
@@ -131,7 +142,11 @@ fun to_c(yogurt: Yogurt): CCode {
   }
 
   b."int main(int argc, char** argv) \{\n
-    '    main_20_int(argc);\n
+    '    Type_Int* _argc = malloc(sizeof(Type_Int));\n
+    '    _argc->value = argc;\n
+    '    Type_Int* result;\n
+    '    result = main_20_Int(_argc);\n
+    '    printf(\"result: %ld\\n\", result->value);\n
     '    return 0;\n
     '}\n
     '"
@@ -143,20 +158,21 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
   for id in body.exprs do {
     for i in 0..indentation do writer."    "
     var expr = fun_.get(id)
-    writer."{expr.type.mangle()} {id.mangle()};\n"
-    
+    writer."{expr.type.mangle()}* {id.mangle()} = 
+      'malloc(sizeof({expr.type.mangle()})); // {expr.type}\n"
+
     switch expr.op
     case param unreachable()
     case comptime(value) {
       for i in 0..indentation do writer."    "
       switch value.kind
       case int(int) {
-        writer."{id.mangle()} = {int};\n"
+        writer."{id.mangle()}->value = {int};\n"
       }
       case string(string) {
-        writer."{id.mangle()}.data = {string.debug()};\n"
+        writer."{id.mangle()}->data = {string.debug()};\n"
         for i in 0..indentation do writer."    "
-        writer."{id.mangle()}.len = {string.len};\n"
+        writer."{id.mangle()}->len = {string.len};\n"
       }
       case type(type) {
         writer."// comptime types is (hopefully) not accessed at runtime"
@@ -167,20 +183,26 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
         for variant in variants.iter().&.enumerate() do
           if variant.item.key == tag.a then
             target_index = variant.index
-        writer."{id.mangle()}.tag = {target_index};\n"
+        writer."{id.mangle()}->tag = {target_index};\n"
       }
     }
     case switch_(switch_) {
       for i in 0..indentation do writer."    "
       var type = fun_.get(switch_.condition).type.enum_.unwrap()
-      writer."switch ({switch_.condition.mangle()}.tag) \{\n"
+      writer."switch ({switch_.condition.mangle()}->tag) \{\n"
       for case_ in switch_.cases do {
         for i in 0..indentation do writer."    "
         var index = 0
         for tag in type.iter().&.enumerate() do {
           if tag.item.key == case_.key then index = tag.index
         }
-        writer."    case {index}:\n"
+        writer."    case {index}: // {case_.key}\n"
+        for param in case_.value.params.iter().&.enumerate() do {
+          for i in 0..{indentation + 2} do writer."    "
+          writer."{fun_.get(param.item).type.mangle()}* {param.item.mangle()} = 
+            '{switch_.condition.mangle()}->as.{case_.key}._{param.index}; 
+            '// {fun_.get(param.item).type}\n"
+        }
         case_.value.to_c(fun_, writer, indentation + 2)
         for i in 0..indentation do writer."    "
         writer."        {id.mangle()} = {case_.value.returns.mangle()};\n"
@@ -195,10 +217,10 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for variant in expr.type.enum_.unwrap().iter().&.enumerate() do
         if variant.item.key == tag.symbol then index = variant.index
       for i in 0..indentation do writer."    "
-      writer."{id.mangle()}.tag = {index};\n"
+      writer."{id.mangle()}->tag = {index};\n"
       for arg in tag.args.iter().enumerate() do {
         for i in 0..indentation do writer."    "
-        writer."{id.mangle()}.as.{tag.symbol}._{arg.index} = {arg.item.mangle()};\n"
+        writer."{id.mangle()}->as.{tag.symbol}._{arg.index} = {arg.item.mangle()};\n"
       }
     }
     case call(call) {
@@ -222,16 +244,25 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for i in 0..indentation do writer."    "
       switch target_type
       case enum_(target_variants) {
-        writer."switch ({cast.mangle()}.tag) \{\n"
+        writer."switch ({cast.mangle()}->tag) \{\n"
         for variant in source_type.enum_.unwrap().iter().&.enumerate()
         do {
           var target_index = 0
           for tag in target_variants.iter().&.enumerate() do {
             if tag.item.key == variant.item.key then target_index = tag.index
           }
-          for i in 0..indentation do writer."    "
-          writer."    case {variant.index}: 
-            '{id.mangle()}.tag = {target_index}; break;\n"
+          for i in 0..{indentation + 1} do writer."    "
+          writer."case {variant.index}: // {variant.item.key}\n"
+          for i in 0..{indentation + 2} do writer."    "
+          writer."{id.mangle()}->tag = {target_index};\n"
+          | TODO: cast the payloads as well
+          for arg in 0..variant.item.value.len do {
+            for i in 0..{indentation + 2} do writer."    "
+            writer."{id.mangle()}->as.{variant.item.key}._{arg} = 
+              '{cast.mangle()}->as.{variant.item.key}._{arg};\n"
+          }
+          for i in 0..{indentation + 2} do writer."    "
+          writer."break;\n"
         }
         for i in 0..indentation do writer."    "
         writer."\}\n"
@@ -242,31 +273,31 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for i in 0..indentation do writer."    "
       var args = instruction.args
       switch instruction.instruction
-      case add writer."{id.mangle()} = {args.get(0).mangle()} + 
-        '{args.get(1).mangle()};\n"
-      case sub writer."{id.mangle()} = {args.get(0).mangle()} - 
-        '{args.get(1).mangle()};\n"
-      case mul writer."{id.mangle()} = {args.get(0).mangle()} * 
-        '{args.get(1).mangle()};\n"
-      case div writer."{id.mangle()} = {args.get(0).mangle()} / 
-        '{args.get(1).mangle()};\n"
+      case add writer."{id.mangle()}->value = {args.get(0).mangle()}->value + 
+        '{args.get(1).mangle()}->value;\n"
+      case sub writer."{id.mangle()}->value = {args.get(0).mangle()}->value - 
+        '{args.get(1).mangle()}->value;\n"
+      case mul writer."{id.mangle()}->value = {args.get(0).mangle()}->value * 
+        '{args.get(1).mangle()}->value;\n"
+      case div writer."{id.mangle()}->value = {args.get(0).mangle()}->value / 
+        '{args.get(1).mangle()}->value;\n"
       case compare {
-        writer."if ({args.get(0).mangle()} < {args.get(1).mangle()}) 
-          '{id.mangle()}.tag = 0;\n"
+        writer."if ({args.get(0).mangle()}->value < {args.get(1).mangle()}->value) 
+          '{id.mangle()}->tag = 0;\n"
         for i in 0..indentation do writer."    "
-        writer."if ({args.get(0).mangle()} == {args.get(1).mangle()}) 
-          '{id.mangle()}.tag = 1;\n"
+        writer."if ({args.get(0).mangle()}->value == {args.get(1).mangle()}->value) 
+          '{id.mangle()}->tag = 1;\n"
         for i in 0..indentation do writer."    "
-        writer."if ({args.get(0).mangle()} > {args.get(1).mangle()}) 
-          '{id.mangle()}.tag = 2;\n"
+        writer."if ({args.get(0).mangle()}->value > {args.get(1).mangle()}->value) 
+          '{id.mangle()}->tag = 2;\n"
       }
       case concat {
         writer."TODO: implement concat"
       }
       case crash {
-        writer."for (int i = 0; i < {args.get(0).mangle()}.len; i++)\n"
+        writer."for (int i = 0; i < {args.get(0).mangle()}->len; i++)\n"
         for i in 0..indentation do writer."    "
-        writer."    fprintf(stderr, \"%c\", {args.get(0).mangle()}.data[i]);\n"
+        writer."    fprintf(stderr, \"%c\", {args.get(0).mangle()}->data[i]);\n"
         for i in 0..indentation do writer."    "
         writer."fprintf(stderr, \"\\n\");\n"
         for i in 0..indentation do writer."    "
