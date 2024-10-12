@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "mar",
+  "scopeName": "source.mar",
+  "fileTypes": ["mar"],
+  "patterns": [
+    { "include": "#all" }
+  ],
+  "repository": {
+    "all": {
+      "patterns": [
+        {
+          "name": "keyword.operator",
+          "match": "=%"
+        },
+        {
+          "name": "string.quoted.double",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "constant.numeric",
+          "match": "[0-9]+"
+        },
+        {
+          "name": "entity.name.type",
+          "match": "\\b[A-Z][a-zA-Z_0-9]*\\b"
+        },
+        {
+          "name": "variable",
+          "match": "\\b[a-z][a-zA-Z_0-9]*\\b"
+        }
+      ]
+    }
+  }
+}
