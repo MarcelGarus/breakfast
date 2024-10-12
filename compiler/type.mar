@@ -21,7 +21,7 @@ var type_type = BreakfastType.primitive("Type")
 var type_never = BreakfastType.never
 var type_ordering = BreakfastType.enum_(map(
   "Less"    -> empty_slice[BreakfastType](),
-  "Equals"  -> empty_slice[BreakfastType](),
+  "Equal"   -> empty_slice[BreakfastType](),
   "Greater" -> empty_slice[BreakfastType](),
 ))
 var type_type_info = BreakfastType.enum_(map(

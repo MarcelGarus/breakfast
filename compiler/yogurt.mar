@@ -239,24 +239,38 @@ fun to_yogurt(
         egg, code, yogurt, egg_to_yogurt = map[EggId, YogurtId]()
       }
       var body = code.body.to_yogurt(params, builder.&, compiler.&)
+
+      | Check that the return type matches what the function claims it is.
+      var param_types = list[BreakfastType]()
+      for param in params do param_types.&.push(
+        switch param case comptime(val) val.type case runtime(type) type
+      )
+      var substitutions =
+        param_types.to_slice().match_against(egg_fun.params).unwrap()
+      var claimed_return_type = egg_fun.return_type.specialize(substitutions)
+      var actual_return_type = builder.get(body.returns).type
+      if claimed_return_type != actual_return_type then {
+        actual_return_type.is_assignable_to(claimed_return_type) or
+          panic("return types don't match:\n
+            'claimed type: {claimed_return_type}\n
+            ' actual type: {actual_return_type}")
+          
+        var body_with_cast = list[YogurtId]()
+        for id in body.exprs do body_with_cast.&.push(id)
+        var cast = builder.&.push(
+          YogurtOp.cast(body.returns) $ claimed_return_type)
+        body_with_cast.&.push(cast)
+        body = YogurtBody {
+          params = body.params,
+          exprs = body_with_cast.to_slice(),
+          returns = cast,
+        }
+      }
+
       YogurtFun { exprs = builder.exprs.to_slice(), body }
     }
     case builtin(builtin) builtin.to_yogurt(params, egg, yogurt)
 
-  { | Check that the return type matches what the function claims it is.
-    var param_types = list[BreakfastType]()
-    for param in params do param_types.&.push(
-      switch param case comptime(val) val.type case runtime(type) type
-    )
-    var substitutions =
-      param_types.to_slice().match_against(egg_fun.params).unwrap()
-    var claimed_return_type = egg_fun.return_type.specialize(substitutions)
-    var actual_return_type = fun_.get(fun_.body.returns).type
-    actual_return_type.is_assignable_to(claimed_return_type) or
-      panic("return types don't match:\n
-        'claimed type: {claimed_return_type}\n
-        ' actual type: {actual_return_type}")
-  }
   println("Done compiling {signature}")
 
   yogurt.funs.&.put(signature, fun_)
