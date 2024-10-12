@@ -20,6 +20,10 @@ Maybe t =
   |
     Some t
     None
+unwrap maybe: (Maybe t) -> t =
+  % maybe
+    Some t: t
+    None: builtin_crash "Called unwrap on None"
 
 List t =
   |
@@ -51,19 +55,10 @@ get_maybe list: (List t) index: Int -> (Maybe t) =
           get_maybe
             rest
             - index 1
-
-make_list len: Int -> (List Int) =
-  % equals len 0
-    True: Empty
-    False:
-      More
-        0
-        make_list
-          -
-            len
-            1
+get list: (List t) index: Int -> t =
+  unwrap
+    get_maybe list index
 
 main a: Int -> Int =
-  l = list 1 2 3
-  len l
-
+  mylist = list 41 42 43
+  get mylist 1
