@@ -10,8 +10,12 @@
     "all": {
       "patterns": [
         {
-          "name": "keyword.operator",
-          "match": "=%"
+          "name": "keyword",
+          "match": "="
+        },
+        {
+          "name": "keyword.control",
+          "match": "%"
         },
         {
           "name": "string.quoted.double",
