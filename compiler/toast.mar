@@ -203,6 +203,7 @@ fun parse_symbol(parser: &Parser): Maybe[String] {
   parser.current().is_upper() or return none[String]()
   parser.parse_identifier()
 }
+| Parses an expression that doesn't include whitespace (except in parentheses).
 fun parse_atom(parser: &Parser): Maybe[ToastExpr] {
   if parser.consume(#() then {
     var expr = parser.parse_expr() or panic("expected expr")
@@ -215,7 +216,8 @@ fun parse_atom(parser: &Parser): Maybe[ToastExpr] {
   if parser.parse_symbol() is some(symbol) then return some(ToastExpr.symbol(symbol))
   none[ToastExpr]()
 }
-fun parse_expr(parser: &Parser): Maybe[ToastExpr] {
+| Parses an expression that doesn't contain pipes (except in parentheses).
+fun parse_unpiped_expr(parser: &Parser): Maybe[ToastExpr] {
   var expr = parser.parse_atom() or return none[ToastExpr]()
 
   var args = list[ToastExpr]()
@@ -225,6 +227,16 @@ fun parse_expr(parser: &Parser): Maybe[ToastExpr] {
       receiver = expr.put_on_heap(), args = args.to_slice()
     })
 
+  some(expr)
+}
+fun parse_expr(parser: &Parser): Maybe[ToastExpr] {
+  var expr = parser.parse_unpiped_expr() or return none[ToastExpr]()
+
+  loop {
+    parser.consume(#|) or break
+    var piped_into = parser.parse_unpiped_expr() or panic("expected expression")
+    expr = piped_call(expr, piped_into)
+  }
   if parser.consume(#=) then {
     var cursor_after_equals_sign = parser.cursor
     if parser.parse_expr() is some(value) then
@@ -363,20 +375,20 @@ fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
 fun parse_pipe(bacon: Bacon, previous: ToastExpr): Maybe[ToastExpr] {
   bacon.line == "|" or return none[ToastExpr]()
   bacon.children.len == 1 or panic("pipe with multiple children")
-  var expr = bacon.children.get(0).to_toast_expr()
-  some(
-    if expr is call(call) then {
-      var args = list(previous)
-      for arg in call.args do args.&.push(arg)
-      ToastExpr.call(ToastCall {
-        receiver = call.receiver, args = args.to_slice()
-      })
-    } else {
-      ToastExpr.call(ToastCall {
-        receiver = expr.put_on_heap(), args = list(previous).to_slice()
-      })
-    }
-  )
+  var piped_into = bacon.children.get(0).to_toast_expr()
+  some(piped_call(previous, piped_into))
+}
+fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
+  if piped_into is call(call) then {
+    var args = list(left)
+    for arg in call.args do args.&.push(arg)
+    ToastExpr.call(ToastCall {
+      receiver = call.receiver, args = args.to_slice()
+    })
+  } else
+    ToastExpr.call(ToastCall {
+      receiver = piped_into.put_on_heap(), args = list(left).to_slice()
+    })
 }
 fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   var exprs = list[ToastExpr]()
