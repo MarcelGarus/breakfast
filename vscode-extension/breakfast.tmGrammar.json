@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "mar",
-  "scopeName": "source.mar",
-  "fileTypes": ["mar"],
+  "name": "bf",
+  "scopeName": "source.bf",
+  "fileTypes": ["bf"],
   "patterns": [
     { "include": "#all" }
   ],

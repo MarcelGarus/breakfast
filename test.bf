@@ -45,6 +45,10 @@ len list: (List t) -> Int =
       +
         len rest
         1
+is_empty list: (List t) -> Bool =
+  equals
+    len list
+    0
 get_maybe list: (List t) index: Int -> (Maybe t) =
   % list
     Empty: None
@@ -60,5 +64,8 @@ get list: (List t) index: Int -> t =
     get_maybe list index
 
 main a: Int -> Int =
-  mylist = list 41 42 43
-  get mylist 1
+  list =
+    % equals 0 0
+      True: list True True True
+      False: list False False
+  len list

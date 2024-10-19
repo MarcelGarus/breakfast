@@ -17,7 +17,7 @@ import type.mar
 fun main(): Never {
   println("Hello, world!\n")
 
-  var content = read_file("test.km") or {
+  var content = read_file("test.bf") or {
     eprintln("Couldn't read file")
     exit(1)
   }
