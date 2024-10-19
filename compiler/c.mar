@@ -162,7 +162,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       'malloc(sizeof({expr.type.mangle()})); // {expr.type}\n"
 
     switch expr.op
-    case param unreachable()
+    case param panic("param should not exist in body")
     case comptime(value) {
       for i in 0..indentation do writer."    "
       switch value.kind
@@ -234,40 +234,6 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
         writer."{arg.mangle()}"
       }
       writer.");\n"
-    }
-    case cast(cast) {
-      var source_type = fun_.get(cast).type
-      var target_type = expr.type
-      
-      if source_type is never then continue
-
-      for i in 0..indentation do writer."    "
-      switch target_type
-      case enum_(target_variants) {
-        writer."switch ({cast.mangle()}->tag) \{\n"
-        for variant in source_type.enum_.unwrap().iter().&.enumerate()
-        do {
-          var target_index = 0
-          for tag in target_variants.iter().&.enumerate() do {
-            if tag.item.key == variant.item.key then target_index = tag.index
-          }
-          for i in 0..{indentation + 1} do writer."    "
-          writer."case {variant.index}: // {variant.item.key}\n"
-          for i in 0..{indentation + 2} do writer."    "
-          writer."{id.mangle()}->tag = {target_index};\n"
-          | TODO: cast the payloads as well
-          for arg in 0..variant.item.value.len do {
-            for i in 0..{indentation + 2} do writer."    "
-            writer."{id.mangle()}->as.{variant.item.key}._{arg} = 
-              '{cast.mangle()}->as.{variant.item.key}._{arg};\n"
-          }
-          for i in 0..{indentation + 2} do writer."    "
-          writer."break;\n"
-        }
-        for i in 0..indentation do writer."    "
-        writer."\}\n"
-      }
-      default panic("casting {source_type} to {target_type} is not supported")
     }
     case instruction(instruction) {
       for i in 0..indentation do writer."    "
