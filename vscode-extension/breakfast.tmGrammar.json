@@ -10,6 +10,20 @@
     "all": {
       "patterns": [
         {
+          "name": "comment",
+          "match": "# (.*)  $",
+          "captures": {
+            "1": {
+              "name": "markup.bold"
+            }
+          }
+        },
+        {
+          "name": "comment",
+          "begin": "#",
+          "end": "$"
+        },
+        {
           "name": "keyword",
           "match": "="
         },

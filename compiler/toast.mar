@@ -335,8 +335,9 @@ fun to_toast_type_def(bacon: Bacon): Maybe[ToastTypeDef] {
   some(ToastTypeDef { name, params = params.to_slice(), type })
 }
 
-fun to_toast_expr(bacon: Bacon): ToastExpr {
+fun to_toast_expr(bacon: Bacon): Maybe[ToastExpr] {
   var parser = parser(bacon.line)
+  if parser.&.consume(##) then return none[ToastExpr]()
   var expr = parser.&.parse_expr() or panic("expected expression")
   var children = bacon.children.to_toast_exprs()
   if parser.&.consume(#=) then
@@ -346,7 +347,7 @@ fun to_toast_expr(bacon: Bacon): ToastExpr {
       receiver = expr.put_on_heap(), args = children
     })
   parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}, expr = {expr.debug()}")
-  expr
+  some(expr)
 }
 fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
   bacon.line == "%" or return none[ToastExpr]()
@@ -374,8 +375,9 @@ fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
 }
 fun parse_pipe(bacon: Bacon, previous: ToastExpr): Maybe[ToastExpr] {
   bacon.line == "|" or return none[ToastExpr]()
-  bacon.children.len == 1 or panic("pipe with multiple children")
-  var piped_into = bacon.children.get(0).to_toast_expr()
+  var children = bacon.children.to_toast_exprs()
+  children.len == 1 or panic("pipe with multiple children")
+  var piped_into = children.get(0)
   some(piped_call(previous, piped_into))
 }
 fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
@@ -395,7 +397,7 @@ fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   var i = 0
   loop {
     var bacon = bacons.get_maybe(i) or break
-    var expr = bacon.to_toast_expr()
+    var expr = bacon.to_toast_expr() or continue
 
     loop {
       var next = bacons.get_maybe(i + 1) or break
@@ -448,6 +450,7 @@ fun to_toast(bacon: Bacon): Toast {
       defs.&.push(ToastDef.fun_(def))
       continue
     }
+    if bacon.line.starts_with("#") then continue
 
     panic("couldn't parse line: {bacon.line}")
   }
