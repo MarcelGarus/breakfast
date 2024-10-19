@@ -204,6 +204,11 @@ fun parse_symbol(parser: &Parser): Maybe[String] {
   parser.parse_identifier()
 }
 fun parse_atom(parser: &Parser): Maybe[ToastExpr] {
+  if parser.consume(#() then {
+    var expr = parser.parse_expr() or panic("expected expr")
+    parser.consume(#)) or panic("expected closing parenthesis")
+    return some(expr)
+  }
   if parser.parse_int() is some(int) then return some(ToastExpr.int(int))
   if parser.parse_string() is some(str) then return some(ToastExpr.string(str))
   if parser.parse_name() is some(name) then return some(ToastExpr.name(name))

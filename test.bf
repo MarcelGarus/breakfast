@@ -41,14 +41,9 @@ list a: t b: t c: t -> (List t) =
 len list: (List t) -> Int =
   % list
     Empty: 0
-    More item rest:
-      +
-        len rest
-        1
+    More item rest: + (len rest) 1
 is_empty list: (List t) -> Bool =
-  equals
-    len list
-    0
+  equals (len list) 0
 get_maybe list: (List t) index: Int -> (Maybe t) =
   % list
     Empty: None
@@ -59,9 +54,7 @@ get_maybe list: (List t) index: Int -> (Maybe t) =
           get_maybe
             rest
             - index 1
-get list: (List t) index: Int -> t =
-  unwrap
-    get_maybe list index
+get list: (List t) index: Int -> t = unwrap (get_maybe list index)
 
 main a: Int -> Int =
   list =
