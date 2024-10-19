@@ -361,7 +361,22 @@ fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
   }))
 }
 fun parse_pipe(bacon: Bacon, previous: ToastExpr): Maybe[ToastExpr] {
-  none[ToastExpr]()
+  bacon.line == "|" or return none[ToastExpr]()
+  bacon.children.len == 1 or panic("pipe with multiple children")
+  var expr = bacon.children.get(0).to_toast_expr()
+  some(
+    if expr is call(call) then {
+      var args = list(previous)
+      for arg in call.args do args.&.push(arg)
+      ToastExpr.call(ToastCall {
+        receiver = call.receiver, args = args.to_slice()
+      })
+    } else {
+      ToastExpr.call(ToastCall {
+        receiver = expr.put_on_heap(), args = list(previous).to_slice()
+      })
+    }
+  )
 }
 fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   var exprs = list[ToastExpr]()
