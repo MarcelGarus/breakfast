@@ -324,36 +324,6 @@ fun to_toast_type_def(bacon: Bacon): Maybe[ToastTypeDef] {
 }
 
 fun to_toast_expr(bacon: Bacon): ToastExpr {
-  if bacon.line.starts_with("%") then {
-    | This is a switch.
-    var condition = {
-      var parser = parser(bacon.line.without_first(1))
-      var expr = parser.&.parse_expr() or panic("expected switch condition")
-      parser.&.is_done() or panic("additional garbage on switch condition line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-      expr
-    }
-    var cases = list[ToastCase]()
-    for case_ in bacon.children do {
-      var parser = parser(case_.line)
-      var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
-      var params = list[String]()
-      loop params.&.push(parser.&.parse_name() or break)
-      parser.&.consume(#:) or panic("expected colon")
-      var body =
-        if parser.cursor == parser.input.len then {
-          ToastExpr.body(case_.children.to_toast_exprs())
-        } else {
-          var expr = parser.&.parse_expr() or panic("expected case expression")
-          parser.&.is_done() or panic("additional garbage on case line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-          case_.children.is_empty() or panic("case that is neither single- nor multi-line")
-          expr
-        }
-      cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
-    }
-    return ToastExpr.switch_(ToastSwitch {
-      condition = condition.put_on_heap(), cases = cases.to_slice()
-    })
-  }
   var parser = parser(bacon.line)
   var expr = parser.&.parse_expr() or panic("expected expression")
   var children = bacon.children.to_toast_exprs()
@@ -366,9 +336,51 @@ fun to_toast_expr(bacon: Bacon): ToastExpr {
   parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}, expr = {expr.debug()}")
   expr
 }
+fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
+  bacon.line == "%" or return none[ToastExpr]()
+  var cases = list[ToastCase]()
+  for case_ in bacon.children do {
+    var parser = parser(case_.line)
+    var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
+    var params = list[String]()
+    loop params.&.push(parser.&.parse_name() or break)
+    parser.&.consume(#:) or panic("expected colon")
+    var body =
+      if parser.cursor == parser.input.len then {
+        ToastExpr.body(case_.children.to_toast_exprs())
+      } else {
+        var expr = parser.&.parse_expr() or panic("expected case expression")
+        parser.&.is_done() or panic("additional garbage on case line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+        case_.children.is_empty() or panic("case that is neither single- nor multi-line")
+        expr
+      }
+    cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
+  }
+  some(ToastExpr.switch_(ToastSwitch {
+    condition = condition.put_on_heap(), cases = cases.to_slice()
+  }))
+}
+fun parse_pipe(bacon: Bacon, previous: ToastExpr): Maybe[ToastExpr] {
+  none[ToastExpr]()
+}
 fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   var exprs = list[ToastExpr]()
-  for bacon in bacons do exprs.&.push(bacon.to_toast_expr())
+  var i = 0
+  loop {
+    var bacon = bacons.get_maybe(i) or break
+    var expr = bacon.to_toast_expr()
+
+    loop {
+      var next = bacons.get_maybe(i + 1) or break
+      if      next.parse_switch(expr) is some(new) then { expr = new }
+      else if next.parse_pipe(expr)   is some(new) then { expr = new }
+      else break
+      i = i + 1
+    }
+
+    exprs.&.push(expr)
+    i = i + 1
+  }
   exprs.to_slice()
 }
 fun to_toast_fun_def(bacon: Bacon): Maybe[ToastFun] {

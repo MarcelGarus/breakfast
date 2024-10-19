@@ -1,12 +1,11 @@
 | Blocks Arranged by COlumn Nesting  
-| A tree that contains all the lines of a file, structured by their indentation.
+| A tree that represents the file content structured by indentation. Each line
+| maps to a node/"block" in that tree. Some leading characters like | and % also
+| introduce new blocks that don't correspond to a line.
 
 import breakfast.mar
 
-struct Bacon {
-  line: String,
-  children: Slice[Bacon],
-}
+struct Bacon { line: String, children: Slice[Bacon] }
 
 fun write[W](writer: W, bacon: Bacon) { writer.write(bacon.children, 0) }
 fun write[W](writer: W, bacon: Bacon, indentation: Int) {
@@ -52,9 +51,28 @@ fun to_bacon(content: String): Bacon {
       if last_child.indentation >= indentation then break
       node = last_child
     }
-    node.children.&.push(OngoingBacon {
-      indentation, line = line.trim(), children = list[OngoingBacon]()
-    })
+    line = line.trim()
+    var first_char = line.chars().get(0)
+    var create_extra_block = first_char == #% or first_char == #|
+    node.children.&.push(
+      if create_extra_block then
+        OngoingBacon {
+          indentation, line = "{first_char}",
+          children =
+            if line.without_first(1).trim().is_empty() then
+              list[OngoingBacon]()
+            else
+              list(OngoingBacon {
+                indentation = indentation + 2,
+                line = line.without_first(1).trim(),
+                children = list[OngoingBacon](),
+              })
+        }
+      else
+        OngoingBacon {
+          indentation, line = line.trim(), children = list[OngoingBacon]()
+        }
+    )
   }
 
   root.to_bacon()
