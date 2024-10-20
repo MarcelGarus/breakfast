@@ -481,7 +481,7 @@ fun to_yogurt(
   builtin: Builtin, builder: &YogurtBodyBuilder, params: Slice[YogurtId]
 ): YogurtId {
   switch builtin
-  case add {
+  case add_ints {
     var a = params.get(0)
     var b = params.get(1)
     if builder.get(a).op is comptime(a) then
@@ -490,10 +490,10 @@ fun to_yogurt(
           a.kind.int.unwrap() + b.kind.int.unwrap()
         ).to_expr())
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.add, args = list(a, b).to_slice()
+      instruction = Instruction.add_ints, args = list(a, b).to_slice()
     }) $ type_int)
   }
-  case sub {
+  case sub_ints {
     var a = params.get(0)
     var b = params.get(1)
     if builder.get(a).op is comptime(a) then
@@ -502,10 +502,46 @@ fun to_yogurt(
           a.kind.int.unwrap() - b.kind.int.unwrap()
         ).to_expr())
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.sub, args = list(a, b).to_slice()
+      instruction = Instruction.sub_ints, args = list(a, b).to_slice()
     }) $ type_int)
   }
-  case compare {
+  case mul_ints {
+    var a = params.get(0)
+    var b = params.get(1)
+    if builder.get(a).op is comptime(a) then
+      if builder.get(b).op is comptime(b) then
+        return builder.&.push(yogurt_value_int(
+          a.kind.int.unwrap() * b.kind.int.unwrap()
+        ).to_expr())
+    builder.&.push(YogurtOp.instruction(YogurtInstruction {
+      instruction = Instruction.mul_ints, args = list(a, b).to_slice()
+    }) $ type_int)
+  }
+  case div_ints {
+    var a = params.get(0)
+    var b = params.get(1)
+    if builder.get(a).op is comptime(a) then
+      if builder.get(b).op is comptime(b) then
+        return builder.&.push(yogurt_value_int(
+          a.kind.int.unwrap() / b.kind.int.unwrap()
+        ).to_expr())
+    builder.&.push(YogurtOp.instruction(YogurtInstruction {
+      instruction = Instruction.div_ints, args = list(a, b).to_slice()
+    }) $ type_int)
+  }
+  case mod_ints {
+    var a = params.get(0)
+    var b = params.get(1)
+    if builder.get(a).op is comptime(a) then
+      if builder.get(b).op is comptime(b) then
+        return builder.&.push(yogurt_value_int(
+          a.kind.int.unwrap() % b.kind.int.unwrap()
+        ).to_expr())
+    builder.&.push(YogurtOp.instruction(YogurtInstruction {
+      instruction = Instruction.mod_ints, args = list(a, b).to_slice()
+    }) $ type_int)
+  }
+  case compare_ints {
     var a = params.get(0)
     var b = params.get(1)
     if builder.get(a).op is comptime(a) then
@@ -520,11 +556,11 @@ fun to_yogurt(
       }
     builder.&.push(
       YogurtOp.instruction(YogurtInstruction {
-        instruction = Instruction.compare, args = list(a, b).to_slice()
+        instruction = Instruction.compare_ints, args = list(a, b).to_slice()
       }) $ type_ordering
     )
   }
-  case concat {
+  case concat_strings {
     var a = params.get(0)
     var b = params.get(1)
     if builder.get(a).op is comptime(a) then
@@ -534,8 +570,16 @@ fun to_yogurt(
         ).to_expr())
 
     builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.concat, args = list(a, b).to_slice()
+      instruction = Instruction.concat_strings, args = list(a, b).to_slice()
     }) $ type_string)
+  }
+  case crash {
+    var message = params.get(0)
+    builder.&.push(
+      YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.crash, args = list(message).to_slice()
+      }) $ BreakfastType.never
+    )
   }
   case type_info {
     var type = builder.get(params.get(0)).op.comptime or
@@ -548,14 +592,6 @@ fun to_yogurt(
       case recursive unreachable()
     builder.&.push(YogurtOp.comptime(yogurt_value_symbol(symbol))
       $ type_type_info)
-  }
-  case crash {
-    var message = params.get(0)
-    builder.&.push(
-      YogurtOp.instruction(YogurtInstruction {
-        instruction = Instruction.crash, args = list(message).to_slice()
-      }) $ BreakfastType.never
-    )
   }
   default todo("implement builtin {builtin}")
 }

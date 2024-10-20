@@ -246,20 +246,11 @@ fun to_egg(
 }
 
 fun create_builtin_fun(builtin: Builtin): EggFun {
-  var signature =
-    switch builtin
-    case add tuple(list(type_int, type_int), type_int)
-    case sub tuple(list(type_int, type_int), type_int)
-    case mul tuple(list(type_int, type_int), type_int)
-    case div tuple(list(type_int, type_int), type_int)
-    case compare tuple(list(type_int, type_int), type_ordering)
-    case concat tuple(list(type_string, type_string), type_string)
-    case type_info tuple(list(type_type), type_type_info)
-    case crash tuple(list(type_string), type_never)
+  var signature = builtin.signature()
   EggFun {
     name = "builtin_{builtin}",
-    params = signature.a.to_slice(),
-    return_type = signature.b,
+    params = signature.params,
+    return_type = signature.return_type,
     impl = EggFunImpl.builtin(builtin),
   }
 }

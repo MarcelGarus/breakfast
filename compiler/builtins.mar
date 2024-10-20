@@ -1,39 +1,60 @@
 import breakfast.mar
 
 enum Builtin {
-  add, sub, mul, div, compare, | int operations
-  concat, | string operations
-  type_info, | type operations
+  | byte operations
+  | TODO: add when we have bytes
+  | int operations
+  add_ints, sub_ints, mul_ints, div_ints, mod_ints, and_ints, or_ints, xor_ints,
+  compare_ints,
+  | string operations
+  concat_strings,
+  | error stuff
   crash,
+  | type operations
+  type_info,
 }
 
 var builtins =
-  list(Builtin.add, Builtin.sub, Builtin.mul, Builtin.div, Builtin.compare,
-    Builtin.concat,
-    Builtin.type_info, Builtin.crash)
-    .to_slice()
+  list(
+    Builtin.add_ints, Builtin.sub_ints, Builtin.mul_ints, Builtin.div_ints,
+    Builtin.mod_ints, Builtin.and_ints, Builtin.or_ints, Builtin.xor_ints,
+    Builtin.compare_ints,
+    Builtin.concat_strings,
+    Builtin.crash,
+    Builtin.type_info,
+  ).to_slice()
 
 fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
 
-fun num_params(builtin: Builtin): Int {
-  switch builtin
-  case add 2
-  case sub 2
-  case mul 2
-  case div 2
-  case compare 2
-  case concat 2
-  case type_info 1
-  case crash 1
+struct BuiltinSignature { params: Slice[BreakfastType], return_type: BreakfastType }
+fun signature(builtin: Builtin): BuiltinSignature {
+  var params_and_return_type =
+    switch builtin
+    case add_ints tuple(list(type_int, type_int), type_int)
+    case sub_ints tuple(list(type_int, type_int), type_int)
+    case mul_ints tuple(list(type_int, type_int), type_int)
+    case div_ints tuple(list(type_int, type_int), type_int)
+    case mod_ints tuple(list(type_int, type_int), type_int)
+    case and_ints tuple(list(type_int, type_int), type_int)
+    case or_ints tuple(list(type_int, type_int), type_int)
+    case xor_ints tuple(list(type_int, type_int), type_int)
+    case compare_ints tuple(list(type_int, type_int), type_ordering)
+    case concat_strings tuple(list(type_string, type_string), type_string)
+    case crash tuple(list(type_string), type_never)
+    case type_info tuple(list(type_type), type_type_info)
+  BuiltinSignature {
+    params = params_and_return_type.a.to_slice(),
+    return_type = params_and_return_type.b,
+  }
 }
 
 enum Instruction {
-  add, sub, mul, div, compare,
-  concat,
+  add_ints, sub_ints, mul_ints, div_ints, mod_ints, and_ints, or_ints, xor_ints,
+  compare_ints,
+  concat_strings,
   crash,
 }
 
 fun write[W](writer: W, instruction: Instruction) {
   writer."{instruction.debug()}"
 }
-

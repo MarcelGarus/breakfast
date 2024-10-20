@@ -239,15 +239,27 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for i in 0..indentation do writer."    "
       var args = instruction.args
       switch instruction.instruction
-      case add writer."{id.mangle()}->value = {args.get(0).mangle()}->value + 
-        '{args.get(1).mangle()}->value;\n"
-      case sub writer."{id.mangle()}->value = {args.get(0).mangle()}->value - 
-        '{args.get(1).mangle()}->value;\n"
-      case mul writer."{id.mangle()}->value = {args.get(0).mangle()}->value * 
-        '{args.get(1).mangle()}->value;\n"
-      case div writer."{id.mangle()}->value = {args.get(0).mangle()}->value / 
-        '{args.get(1).mangle()}->value;\n"
-      case compare {
+      case add_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value + {args.get(1).mangle()}->value;\n"
+      case sub_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value - {args.get(1).mangle()}->value;\n"
+      case mul_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value * {args.get(1).mangle()}->value;\n"
+      case div_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value / {args.get(1).mangle()}->value;\n"
+      case mod_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value % {args.get(1).mangle()}->value;\n
+        'if ({id.mangle()}->value < 0)\n
+        '  {id.mangle()}->value = ({args.get(1).mangle()}->value < 0)\n
+        '    ? {id.mangle()}->value - {args.get(1).mangle()}->value\n
+        '    : {id.mangle()}->value + {args.get(1).mangle()}->value;\n"
+      case and_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value & {args.get(1).mangle()}->value;\n"
+      case or_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value | {args.get(1).mangle()}->value;\n"
+      case xor_ints writer."{id.mangle()}->value = 
+        '{args.get(0).mangle()}->value ^ {args.get(1).mangle()}->value;\n"
+      case compare_ints {
         writer."if ({args.get(0).mangle()}->value < {args.get(1).mangle()}->value) 
           '{id.mangle()}->tag = 0;\n"
         for i in 0..indentation do writer."    "
@@ -257,7 +269,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
         writer."if ({args.get(0).mangle()}->value > {args.get(1).mangle()}->value) 
           '{id.mangle()}->tag = 2;\n"
       }
-      case concat {
+      case concat_strings {
         writer."TODO: implement concat"
       }
       case crash {

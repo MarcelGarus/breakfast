@@ -397,7 +397,7 @@ fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
   var i = 0
   loop {
     var bacon = bacons.get_maybe(i) or break
-    var expr = bacon.to_toast_expr() or continue
+    var expr = bacon.to_toast_expr() or { i = i + 1  continue }
 
     loop {
       var next = bacons.get_maybe(i + 1) or break
