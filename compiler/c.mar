@@ -98,7 +98,7 @@ fun to_c(yogurt: Yogurt): CCode {
       }
       b."    \} as;\n"
     }
-    case recursive(level) b."// TODO: handle recursive types"
+    case recursive unreachable()
     b."\};\n"
   }
 
@@ -163,6 +163,9 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
 
     switch expr.op
     case param panic("param should not exist in body")
+    case uninitialized {
+      writer."// intentionally left blank\n"
+    }
     case comptime(value) {
       for i in 0..indentation do writer."    "
       switch value.kind

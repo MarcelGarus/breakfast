@@ -23,6 +23,7 @@ enum YogurtValueKind {
 
 enum YogurtOp {
   param,
+  uninitialized,
   comptime: YogurtValue,
   switch_: YogurtSwitch,
   tag: YogurtTag,
@@ -75,6 +76,7 @@ fun write[W](
   writer: W, op: YogurtOp, fun_: YogurtFun, indentation: Int
 ) {
   switch op
+  case uninitialized writer."uninitialized"
   case comptime(value) writer."comptime {value}"
   case param(param) writer."param {param}"
   case switch_(switch_) {
@@ -634,13 +636,10 @@ fun compile_cast_fun_body(
   yogurt: &Yogurt, from: BreakfastType, to: BreakfastType,
   builder: &YogurtBodyBuilder, param: YogurtId,
 ): YogurtId {
-  if from is never then {
-    todo()
-  }
-  if from == to then {
-    | The cast fun is just the identity fun.
-    return param
-  }
+  if from is never then
+    return builder.push(YogurtOp.uninitialized $ to)
+  if from == to then
+    return param | The cast fun is just the identity fun.
 
   switch to.extend_one_level()
   case enum_(to_variants) {
