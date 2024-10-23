@@ -210,6 +210,10 @@ fun to_egg(
       call.args.is_empty() or panic("called Type with args")
       return type_type
     }
+    if name == "Never" then {
+      call.args.is_empty() or panic("called Never with args")
+      return type_never
+    }
 
     | Are we recursively lowering a type? If so, we need to insert a recursive
     | type instead of endlessly digging down into the type.

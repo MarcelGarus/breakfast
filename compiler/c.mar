@@ -200,6 +200,7 @@ fun to_c(yogurt: Yogurt): CCode {
 
   b."int main(int argc, char** argv) \{\n
     '    Type_Int* _argc = malloc(sizeof(Type_Int));\n
+    '    _argc->rc = 1;\n
     '    _argc->value = argc;\n
     '    Type_String* result;\n
     '    result = main_20_Int(_argc);\n
