@@ -1,44 +1,44 @@
-| Types in Breakfast  
-| Breakfast has a structural type system, which means that types don't have
+| Types in Plum  
+| Plum has a structural type system, which means that types don't have
 | identities. If you define Foo = Int and Bar = Int, then Foo, Bar, and Int can
 | be used interchangably. Starting with the Egg compiler stage, all types are
 | self-contained and you don't any type definitions any more.
 |
 | This file contains most operations that we need to perform on types.
 
-import breakfast.mar
+import plum.mar
 
-enum BreakfastType {
+enum PlumType {
   primitive: String,
   never,
-  enum_: Map[String, Slice[BreakfastType]],
+  enum_: Map[String, Slice[PlumType]],
   recursive: Int,
 }
 
-var type_int = BreakfastType.primitive("Int")
-var type_string = BreakfastType.primitive("String")
-var type_type = BreakfastType.primitive("Type")
-var type_never = BreakfastType.never
-var type_ordering = BreakfastType.enum_(map(
-  "Less"    -> empty_slice[BreakfastType](),
-  "Equal"   -> empty_slice[BreakfastType](),
-  "Greater" -> empty_slice[BreakfastType](),
+var type_int = PlumType.primitive("Int")
+var type_string = PlumType.primitive("String")
+var type_type = PlumType.primitive("Type")
+var type_never = PlumType.never
+var type_ordering = PlumType.enum_(map(
+  "Less"    -> empty_slice[PlumType](),
+  "Equal"   -> empty_slice[PlumType](),
+  "Greater" -> empty_slice[PlumType](),
 ))
-var type_type_info = BreakfastType.enum_(map(
-  "Int"    -> empty_slice[BreakfastType](),
-  "String" -> empty_slice[BreakfastType](),
-  "Type"   -> empty_slice[BreakfastType](),
-  "Enum"   -> empty_slice[BreakfastType](),
+var type_type_info = PlumType.enum_(map(
+  "Int"    -> empty_slice[PlumType](),
+  "String" -> empty_slice[PlumType](),
+  "Type"   -> empty_slice[PlumType](),
+  "Enum"   -> empty_slice[PlumType](),
 ))
 
-fun ==(a: BreakfastType, b: BreakfastType): Bool {
+fun ==(a: PlumType, b: PlumType): Bool {
   switch a
   case primitive(a) if b is primitive(b) then a == b else false
   case never(a)     if b is never(b)     then a == b else false
   case enum_(a)     if b is enum_(b)     then a == b else false
   case recursive(a) if b is recursive(b) then a == b else false
 }
-fun hash(hasher: &Hasher, type: BreakfastType) {
+fun hash(hasher: &Hasher, type: PlumType) {
   switch type
   case primitive { hasher.hash(0) }
   case never     { hasher.hash(1) }
@@ -46,7 +46,7 @@ fun hash(hasher: &Hasher, type: BreakfastType) {
   case recursive { hasher.hash(3) }
 }
 
-fun write[W](writer: W, type: BreakfastType) {
+fun write[W](writer: W, type: PlumType) {
   switch type
   case primitive(name) writer."{name}"
   case never writer."Never"
@@ -81,40 +81,40 @@ fun write[W](writer: W, type: BreakfastType) {
 | Never          -> Never         ? {}
 | | Foo Bar      -> | Foo Bar Baz ? {}
 fun match_against(
-  concrete: BreakfastType, generic: BreakfastType
+  concrete: PlumType, generic: PlumType
 ): Maybe[Substitutions] {
   var constraints = constraints()
   concrete.match_against(
     generic, constraints.&,
-    list[Tuple2[BreakfastType, BreakfastType]]().&
+    list[Tuple2[PlumType, PlumType]]().&
   ) or return none[Substitutions]()
   constraints.check_coherency()
 }
 fun match_against(
-  concrete: Slice[BreakfastType], generic: Slice[BreakfastType]
+  concrete: Slice[PlumType], generic: Slice[PlumType]
 ): Maybe[Substitutions] {
   var constraints = constraints()
   concrete.match_against(
     generic, constraints.&,
-    list[Tuple2[BreakfastType, BreakfastType]]().&
+    list[Tuple2[PlumType, PlumType]]().&
   ) or return none[Substitutions]()
   constraints.check_coherency()
 }
 | A mapping from type variables (lowercase) to concrete types that they need to
 | be replaced with.
-struct Substitutions { substitutions: Map[String, BreakfastType] }
+struct Substitutions { substitutions: Map[String, PlumType] }
 struct TypeVariableConstraints {
-  constraints: List[Tuple2[String, BreakfastType]]
+  constraints: List[Tuple2[String, PlumType]]
 }
 fun constraints(): TypeVariableConstraints {
   TypeVariableConstraints {
-    constraints = list[Tuple2[String, BreakfastType]]()
+    constraints = list[Tuple2[String, PlumType]]()
   }
 }
 fun check_coherency(
   constraints: TypeVariableConstraints
 ): Maybe[Substitutions] {
-  var substitutions = map[String, BreakfastType]()
+  var substitutions = map[String, PlumType]()
   var works = true
   for constraint in constraints.constraints do {
     var variable = constraint.a
@@ -129,9 +129,9 @@ fun check_coherency(
   else none[Substitutions]()
 }
 fun match_against(
-  concrete: BreakfastType, generic: BreakfastType,
+  concrete: PlumType, generic: PlumType,
   constraints: &TypeVariableConstraints,
-  currently_matching: &List[Tuple2[BreakfastType, BreakfastType]],
+  currently_matching: &List[Tuple2[PlumType, PlumType]],
 ): Bool {
   if currently_matching.iter().&.find(tuple(concrete, generic)) is some(index)
   then return true
@@ -148,9 +148,9 @@ fun match_against(
   result
 }
 fun match_against_logic(
-  concrete: BreakfastType, generic: BreakfastType,
+  concrete: PlumType, generic: PlumType,
   constraints: &TypeVariableConstraints,
-  currently_matching: &List[Tuple2[BreakfastType, BreakfastType]],
+  currently_matching: &List[Tuple2[PlumType, PlumType]],
 ): Bool {
   if concrete is never then return true
 
@@ -178,9 +178,9 @@ fun match_against_logic(
   case recursive todo()
 }
 fun match_against(
-  concrete: Slice[BreakfastType], generic: Slice[BreakfastType],
+  concrete: Slice[PlumType], generic: Slice[PlumType],
   constraints: &TypeVariableConstraints,
-  currently_matching: &List[Tuple2[BreakfastType, BreakfastType]],
+  currently_matching: &List[Tuple2[PlumType, PlumType]],
 ): Bool {
   concrete.len == generic.len or return false
   for both in zip(concrete.iter(), generic.iter()) do
@@ -194,22 +194,22 @@ fun match_against(
 | For example, specializing (List t) using {t -> Int} to (List Int).
 
 fun specialize(
-  type: BreakfastType, substitutions: Substitutions
-): BreakfastType {
+  type: PlumType, substitutions: Substitutions
+): PlumType {
   switch type
   case primitive(name)
-    substitutions.substitutions.get_maybe(name) or BreakfastType.primitive(name)
-  case never BreakfastType.never
+    substitutions.substitutions.get_maybe(name) or PlumType.primitive(name)
+  case never PlumType.never
   case enum_(enum_) {
-    var variants = map[String, Slice[BreakfastType]]()
+    var variants = map[String, Slice[PlumType]]()
     for variant in enum_ do {
-      var args = list[BreakfastType]()
+      var args = list[PlumType]()
       for arg in variant.value do args.&.push(arg.specialize(substitutions))
       variants.&.put(variant.key, args.to_slice())
     }
-    BreakfastType.enum_(variants)
+    PlumType.enum_(variants)
   }
-  case recursive(level) BreakfastType.recursive(level)
+  case recursive(level) PlumType.recursive(level)
 }
 
 
@@ -251,30 +251,30 @@ fun specialize(
 | to the new root". Then, we walk the original type and replace all recursive
 | types that reference the root with this extension, replacing -1 with the level
 | that we are currently at.
-fun extend_one_level(type: BreakfastType): BreakfastType {
+fun extend_one_level(type: PlumType): PlumType {
   switch type
-  case primitive(name) BreakfastType.primitive(name)
-  case never BreakfastType.never
-  case enum_(variants) BreakfastType.enum_({
-    var new_variants = map[String, Slice[BreakfastType]]()
+  case primitive(name) PlumType.primitive(name)
+  case never PlumType.never
+  case enum_(variants) PlumType.enum_({
+    var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
       new_variants.&.put(variant.key, {
-        var args = list[BreakfastType]()
+        var args = list[PlumType]()
         for arg in variant.value.iter().enumerate() do
           args.&.push({
             | Type that is the original enum except the variant that we navigate into.
             | This variant has been replaced with a recursive type.
             var extension = {
-              var ext_variants = map[String, Slice[BreakfastType]]()
+              var ext_variants = map[String, Slice[PlumType]]()
               for ext_variant in variants do
                 ext_variants.&.put(
                   ext_variant.key,
                   if ext_variant.key == variant.key then {
-                    var ext_args = list[BreakfastType]()
+                    var ext_args = list[PlumType]()
                     for ext_arg in variant.value.iter().enumerate() do
                       ext_args.&.push(
                         if arg.index == ext_arg.index then
-                          BreakfastType.recursive(-1)
+                          PlumType.recursive(-1)
                         else
                           ext_arg.item
                       )
@@ -282,7 +282,7 @@ fun extend_one_level(type: BreakfastType): BreakfastType {
                   }
                   else ext_variant.value
                 )
-              BreakfastType.enum_(ext_variants)
+              PlumType.enum_(ext_variants)
             }
             arg.item.extend_recursive_types(1, extension)
           })
@@ -293,45 +293,45 @@ fun extend_one_level(type: BreakfastType): BreakfastType {
   case recursive unreachable()
 }
 fun extend_recursive_types(
-  type: BreakfastType, level: Int, extension: BreakfastType
-): BreakfastType {
+  type: PlumType, level: Int, extension: PlumType
+): PlumType {
   switch type
-  case primitive(name) BreakfastType.primitive(name)
-  case never BreakfastType.never
+  case primitive(name) PlumType.primitive(name)
+  case never PlumType.never
   case enum_(variants) {
-    var new_variants = map[String, Slice[BreakfastType]]()
+    var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
       new_variants.&.put(variant.key, {
-        var args = list[BreakfastType]()
+        var args = list[PlumType]()
         for arg in variant.value do
           args.&.push(arg.extend_recursive_types(level + 1, extension))
         args.to_slice()
       })
-    BreakfastType.enum_(new_variants)
+    PlumType.enum_(new_variants)
   }
   case recursive(actual_level)
     if actual_level == level then
       extension.replace_recursive_level(-1, level)
     else
-      BreakfastType.recursive(actual_level)
+      PlumType.recursive(actual_level)
 }
-fun replace_recursive_level(type: BreakfastType, from: Int, to: Int): BreakfastType {
+fun replace_recursive_level(type: PlumType, from: Int, to: Int): PlumType {
   switch type
-  case primitive(name) BreakfastType.primitive(name)
-  case never BreakfastType.never
+  case primitive(name) PlumType.primitive(name)
+  case never PlumType.never
   case enum_(variants) {
-    var new_variants = map[String, Slice[BreakfastType]]()
+    var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
       new_variants.&.put(variant.key, {
-        var args = list[BreakfastType]()
+        var args = list[PlumType]()
         for arg in variant.value do
           args.&.push(arg.replace_recursive_level(from, to))
         args.to_slice()
       })
-    BreakfastType.enum_(new_variants)
+    PlumType.enum_(new_variants)
   }
   case recursive(actual_level)
-    BreakfastType.recursive(if actual_level == from then to else actual_level)
+    PlumType.recursive(if actual_level == from then to else actual_level)
 }
 
 
@@ -347,12 +347,12 @@ fun replace_recursive_level(type: BreakfastType, from: Int, to: Int): BreakfastT
 |     B
 |       | A
 |         B ^2
-fun =~=(a: BreakfastType, b: BreakfastType): Bool {
-  is_equivalent(a, b, list[Tuple2[BreakfastType, BreakfastType]]().&)
+fun =~=(a: PlumType, b: PlumType): Bool {
+  is_equivalent(a, b, list[Tuple2[PlumType, PlumType]]().&)
 }
 fun is_equivalent(
-  a: BreakfastType, b: BreakfastType,
-  currently_comparing: &List[Tuple2[BreakfastType, BreakfastType]],
+  a: PlumType, b: PlumType,
+  currently_comparing: &List[Tuple2[PlumType, PlumType]],
 ): Bool {
   if currently_comparing.iter().&.contains(tuple(a, b)) then return true
 
@@ -366,8 +366,8 @@ fun is_equivalent(
   result
 }
 fun is_equivalent_logic(
-  a: BreakfastType, b: BreakfastType,
-  currently_comparing: &List[Tuple2[BreakfastType, BreakfastType]],
+  a: PlumType, b: PlumType,
+  currently_comparing: &List[Tuple2[PlumType, PlumType]],
 ): Bool {
   switch a
   case primitive(name) {b.primitive or return false} == name
@@ -416,22 +416,22 @@ fun is_equivalent_logic(
 | recursive A variant. As soon as either B or C occur, we know from which
 | original type this value stems, so we have a more precise type for the
 | contained payload.
-fun join(types: Slice[BreakfastType]): Maybe[BreakfastType] {
+fun join(types: Slice[PlumType]): Maybe[PlumType] {
   var common = types.get(0)
   for type in types.without_first() do
-    common = join(common, type) or return none[BreakfastType]()
+    common = join(common, type) or return none[PlumType]()
   some(common)
 }
-fun join(a: BreakfastType, b: BreakfastType): Maybe[BreakfastType] {
-  join(a, b, list[Tuple2[BreakfastType, BreakfastType]]().&)
+fun join(a: PlumType, b: PlumType): Maybe[PlumType] {
+  join(a, b, list[Tuple2[PlumType, PlumType]]().&)
 }
 fun join(
-  a: BreakfastType, b: BreakfastType,
-  currently_joining: &List[Tuple2[BreakfastType, BreakfastType]],
-): Maybe[BreakfastType] {
+  a: PlumType, b: PlumType,
+  currently_joining: &List[Tuple2[PlumType, PlumType]],
+): Maybe[PlumType] {
   if currently_joining.iter().&.find(tuple(a, b)) is some(index) then {
     var level = currently_joining.len - index
-    return some(BreakfastType.recursive(level))
+    return some(PlumType.recursive(level))
   }
 
   currently_joining.push(tuple(a, b))
@@ -444,38 +444,38 @@ fun join(
   result
 }
 fun join_logic(
-  a: BreakfastType, b: BreakfastType,
-  currently_joining: &List[Tuple2[BreakfastType, BreakfastType]],
-): Maybe[BreakfastType] {
+  a: PlumType, b: PlumType,
+  currently_joining: &List[Tuple2[PlumType, PlumType]],
+): Maybe[PlumType] {
   if a is never then return some(b)
   if b is never then return some(a)
 
   switch a
   case primitive(a_name) {
-    var b_name = b.primitive or return none[BreakfastType]()
-    a_name == b_name or return none[BreakfastType]()
-    some(BreakfastType.primitive(a_name))
+    var b_name = b.primitive or return none[PlumType]()
+    a_name == b_name or return none[PlumType]()
+    some(PlumType.primitive(a_name))
   }
   case never unreachable()
   case enum_(a_variants) {
-    var b_variants = b.enum_ or return none[BreakfastType]()
-    var variants = map[String, Slice[BreakfastType]]()
+    var b_variants = b.enum_ or return none[PlumType]()
+    var variants = map[String, Slice[PlumType]]()
     for variant in a_variants do variants.&.put(variant.key, variant.value)
     for variant in b_variants do {
       var key = variant.key
       var b_args = variant.value
       variants.&.put(key, {
         if variants.get_maybe(key) is some(a_args) then {
-          a_args.len == b_args.len or return none[BreakfastType]()
-          var args = list[BreakfastType]()
+          a_args.len == b_args.len or return none[PlumType]()
+          var args = list[PlumType]()
           for both in zip(a_args.iter(), b_args.iter()) do
             args.&.push(join(both.a, both.b, currently_joining) or
-              return none[BreakfastType]())
+              return none[PlumType]())
           args.to_slice()
         } else b_args
       })
     }
-    some(BreakfastType.enum_(variants))
+    some(PlumType.enum_(variants))
   }
   case recursive unreachable()
 }
@@ -485,6 +485,6 @@ fun join_logic(
 | Types are really just sets of values. One type is considered to be assignable
 | to another type if all values of the first type are also values of the second
 | type.
-fun is_assignable_to(from: BreakfastType, to: BreakfastType): Bool {
+fun is_assignable_to(from: PlumType, to: PlumType): Bool {
   {join(from, to) or return false} =~= to
 }

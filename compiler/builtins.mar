@@ -1,4 +1,4 @@
-import breakfast.mar
+import plum.mar
 
 enum Builtin {
   | byte operations
@@ -26,7 +26,7 @@ var builtins =
 
 fun write[W](writer: W, builtin: Builtin) { writer."{builtin.debug()}" }
 
-struct BuiltinSignature { params: Slice[BreakfastType], return_type: BreakfastType }
+struct BuiltinSignature { params: Slice[PlumType], return_type: PlumType }
 fun signature(builtin: Builtin): BuiltinSignature {
   var params_and_return_type =
     switch builtin

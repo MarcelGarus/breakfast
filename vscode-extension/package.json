@@ -1,12 +1,12 @@
 {
-  "name": "breakfast",
-  "displayName": "Breakfast",
-  "description": "Breakfast language support",
+  "name": "plum",
+  "displayName": "Plum",
+  "description": "Plum language support",
   "publisher": "MarcelGarus",
   "version": "0.0.2",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MarcelGarus/breakfast.git",
+    "url": "https://github.com/MarcelGarus/plum.git",
     "directory": "vscode-extension"
   },
   "//": "https://github.com/ewanharris/vscode-versions",
@@ -24,13 +24,13 @@
   "contributes": {
     "grammars": [
       {
-        "language": "breakfast",
+        "language": "plum",
         "scopeName": "source.bf",
-        "path": "./breakfast.tmGrammar.json"
+        "path": "./plum.tmGrammar.json"
       }
     ],
     "configurationDefaults": {
-      "[breakfast]": {
+      "[plum]": {
         "editor.detectIndentation": false,
         "editor.insertSpaces": true,
         "editor.suggest.insertMode": "replace",
@@ -40,12 +40,12 @@
     },
     "languages": [
       {
-        "id": "breakfast",
+        "id": "plum",
         "extensions": [
           ".bf"
         ],
         "aliases": [
-          "Breakfast"
+          "plum"
         ],
         "configuration": "./language-configuration.json"
       }

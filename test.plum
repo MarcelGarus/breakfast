@@ -1,4 +1,4 @@
-# Welcome to Breakfast!  
+# Welcome to Plum!  
 
 # Nothing (aka Unit or Void)  
 # Nothing is a type with only one instance. From an information theoretical
@@ -27,6 +27,8 @@ ignore value: t -> Nothing = Nothing
 # Never is never instantiated, it can be assigned to anything:
 #
 # some_bool = crash "Oh no!"
+
+crash message: String -> Never = builtin_crash message
 
 # Bool  
 # A type with two instances.
@@ -75,6 +77,12 @@ flip ordering: Ordering -> Ordering =
   % Less: Greater
     Equal: Equal
     Greater: Less
+
+less_than a: Int b: Int -> Bool =
+  compare a b
+  % Less: True
+    Equal: False
+    Greater: False
 
 # fun <[T](a: T, b: T): Bool { a <=> b is less }
 # fun >[T](a: T, b: T): Bool { a <=> b is greater }
@@ -165,9 +173,10 @@ pow_rec result: Int base: Int exponent: Int -> Int =
   exponent | equals 0
   % True: result
     False: pow_rec (result | * base) base (exponent | - 1)
+negate int: Int -> Int = 0 | - int
 abs int: Int -> Int =
   compare int 0
-  % Less: 0 | - int
+  % Less: negate int
     Equal: 0
     Greater: int
 compare a: Int b: Int -> Ordering = builtin_compare_ints a b
@@ -215,27 +224,48 @@ equals a: Int b: Int -> Bool =
 #  some(num)
 #}
 
-#fun write[W](writer: W, int: Int) {
-#  if int < 0
-#  then writer."-{ {0 - int}.radix(10)}"
-#  else writer."{int.radix(10)}"
-#}
-#fun radix(int: Int, radix: Int): RadixFormat { RadixFormat { radix, int } }
-#struct RadixFormat { radix: Int, int: Int }
-#fun write[W](writer: W, format: RadixFormat) {
-#  var divisor = 1
-#  loop {
-#    if format.int / divisor < format.radix then break
-#    divisor = divisor * format.radix
-#  }
-#  loop {
-#    writer.write(
-#      {format.int / divisor % format.radix}.lower_byte().digit_to_char())
-#    if divisor == 1 then break
-#    divisor = divisor / format.radix
-#  }
-#}
-#fun write_debug[W](writer: W, int: Int) { writer."{int}" }
+to_string int: Int -> String =
+  int | less_than 0
+  % True: + "-" (negate int | to_string)
+    False:
+      last_digit = int | mod 10
+      last_digit_string =
+        last_digit | equals 0
+        % True: "0"
+          False:
+            last_digit | equals 1
+            % True: "1"
+              False:
+                last_digit | equals 2
+                % True: "2"
+                  False:
+                    last_digit | equals 3
+                    % True: "3"
+                      False:
+                        last_digit | equals 4
+                        % True: "4"
+                          False:
+                            last_digit | equals 5
+                            % True: "5"
+                              False:
+                                last_digit | equals 6
+                                % True: "6"
+                                  False:
+                                    last_digit | equals 7
+                                    % True: "7"
+                                      False:
+                                        last_digit | equals 8
+                                        % True: "8"
+                                          False:
+                                            last_digit | equals 9
+                                            % True: "9"
+                                              False:
+                                                crash "unreachable"
+      +
+        int | less_than 10
+        % True: ""
+          False: int | div 10 | to_string
+        last_digit_string
 
 # Strings  
 
@@ -277,10 +307,10 @@ get list: (List t) index: Int -> t =
 
 ####################### Actual program #######################
 
-main a: Int -> Int =
-  a | mod 2
-  # list =
-  #   equals 0 0
-  #   % True: list True True True
-  #     False: list False False
-  # len list
+foo item: Int -> Int =
+  list item 2 3 | get 1
+
+main a: Int -> String =
+  +
+    "Hello, world! There are "
+    + (a | to_string) " arguments."

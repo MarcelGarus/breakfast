@@ -13,12 +13,12 @@
 |   expressions in function bodies have been flattened to a series of small
 |   expressions.
 
-import breakfast.mar
+import plum.mar
 
 struct Egg { funs: List[EggFun] }
 
 struct EggFun {
-  name: String, params: Slice[BreakfastType], return_type: BreakfastType,
+  name: String, params: Slice[PlumType], return_type: PlumType,
   impl: EggFunImpl
 }
 enum EggFunImpl { code: EggCode, builtin: Builtin }
@@ -149,7 +149,7 @@ fun to_egg(toast: Toast): Egg {
       funs.&.push(EggFun {
         name = fun_.name,
         params = {
-          var params = list[BreakfastType]()
+          var params = list[PlumType]()
           for param in fun_.params do
             params.&.push(param.type.to_egg(toast))
           params.to_slice()
@@ -175,24 +175,24 @@ fun to_egg(toast: Toast): Egg {
   Egg { funs }
 }
 
-fun to_egg(type: ToastType, toast: Toast): BreakfastType {
-  type.to_egg(toast, map[String, BreakfastType](), list[OngoingTypeCall](), 0)
+fun to_egg(type: ToastType, toast: Toast): PlumType {
+  type.to_egg(toast, map[String, PlumType](), list[OngoingTypeCall](), 0)
 }
-struct OngoingTypeCall { depth: Int, name: String, args: Slice[BreakfastType] }
+struct OngoingTypeCall { depth: Int, name: String, args: Slice[PlumType] }
 fun to_egg(
-  type: ToastType, toast: Toast, env: Map[String, BreakfastType],
+  type: ToastType, toast: Toast, env: Map[String, PlumType],
   parent_calls: List[OngoingTypeCall], depth: Int,
-): BreakfastType {
+): PlumType {
   switch type
   case variable(variable)
     if env.get_maybe(variable) is some(type)
     then type
-    else BreakfastType.primitive(variable)
+    else PlumType.primitive(variable)
   case call(call) {
     var name = call.name
     
     | Lower the arguments.
-    var args = list[BreakfastType]()
+    var args = list[PlumType]()
     for arg in call.args do
       args.&.push(arg.to_egg(toast, env, parent_calls, depth))
     var args = args.to_slice()
@@ -219,13 +219,13 @@ fun to_egg(
     | type instead of endlessly digging down into the type.
     for call in parent_calls do
       if call.name == name and call.args == args then
-        return BreakfastType.recursive(depth - call.depth)
+        return PlumType.recursive(depth - call.depth)
 
     | Look for a user-defined type with the name.
     for def in toast.defs do
       if def is type(def) then
         if def.name == name then {
-          var inner_env = map[String, BreakfastType]()
+          var inner_env = map[String, PlumType]()
           def.params.len == args.len or
             panic("tried to instantiate {def.name} with {args.len} args, but it needs {def.params.len}")
           for both in zip(def.params.iter(), args.iter()) do
@@ -238,14 +238,14 @@ fun to_egg(
     panic("{name} doesn't exist")
   }
   case enum_(enum_) {
-    var variants = map[String, Slice[BreakfastType]]()
+    var variants = map[String, Slice[PlumType]]()
     for variant in enum_ do {
-      var args = list[BreakfastType]()
+      var args = list[PlumType]()
       for arg in variant.value do
         args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1))
       variants.&.put(variant.key, args.to_slice())
     }
-    BreakfastType.enum_(variants)
+    PlumType.enum_(variants)
   }
 }
 

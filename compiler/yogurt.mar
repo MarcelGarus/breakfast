@@ -1,23 +1,23 @@
 | Your Official Graph Using Resolved Types  
 
-import breakfast.mar
+import plum.mar
 
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: String }
-enum YogurtParam { runtime: BreakfastType, comptime: YogurtValue }
+enum YogurtParam { runtime: PlumType, comptime: YogurtValue }
 
 struct YogurtFun { exprs: Slice[YogurtExpr], body: YogurtBody }
 struct YogurtId { int: Int }
 struct YogurtBody {
   params: Slice[YogurtId], exprs: Slice[YogurtId], returns: YogurtId
 }
-struct YogurtExpr { op: YogurtOp, type: BreakfastType }
+struct YogurtExpr { op: YogurtOp, type: PlumType }
 
-struct YogurtValue { type: BreakfastType, kind: YogurtValueKind }
+struct YogurtValue { type: PlumType, kind: YogurtValueKind }
 enum YogurtValueKind {
   int: Int,
   string: String,
-  type: BreakfastType,
+  type: PlumType,
   tag: Tuple2[String, Slice[YogurtValue]],
 }
 
@@ -119,7 +119,7 @@ fun write[W](writer: W, value: YogurtValue) {
 | the name and argument types.
 
 struct EggLookupResult { fun_: EggFun, substitutions: Substitutions }
-fun lookup(egg: Egg, name: String, args: Slice[BreakfastType]): EggLookupResult {
+fun lookup(egg: Egg, name: String, args: Slice[PlumType]): EggLookupResult {
   var name_matches = list[EggFun]()
   for fun_ in egg.funs do
     if fun_.name == name then
@@ -153,7 +153,7 @@ fun lookup(egg: Egg, name: String, args: Slice[BreakfastType]): EggLookupResult 
 
 | Convert Egg to Yogurt  
 
-fun $(op: YogurtOp, type: BreakfastType): _ { YogurtExpr { op, type } }
+fun $(op: YogurtOp, type: PlumType): _ { YogurtExpr { op, type } }
 fun to_expr(value: YogurtValue): _ { YogurtOp.comptime(value) $ value.type }
 fun to_expr(param: YogurtParam): YogurtExpr {
   switch param
@@ -167,12 +167,12 @@ fun yogurt_value_int(int: Int): _ {
 fun yogurt_value_string(string: String): _ {
   YogurtValue { type = type_string, kind = YogurtValueKind.string(string) }
 }
-fun yogurt_value_type(type: BreakfastType): _ {
+fun yogurt_value_type(type: PlumType): _ {
   YogurtValue { type = type_type, kind = YogurtValueKind.type(type) }
 }
 fun yogurt_value_symbol(symbol: String): _ {
   YogurtValue {
-    type = BreakfastType.enum_(map(symbol -> empty_slice[BreakfastType]())),
+    type = PlumType.enum_(map(symbol -> empty_slice[PlumType]())),
     kind = YogurtValueKind.tag(tuple(symbol, empty_slice[YogurtValue]())),
   }
 }
@@ -243,7 +243,7 @@ fun to_yogurt(
       var body = code.body.to_yogurt(params, builder.&, compiler.&)
 
       | Check that the return type matches what the function claims it is.
-      var param_types = list[BreakfastType]()
+      var param_types = list[PlumType]()
       for param in params do param_types.&.push(
         switch param case comptime(val) val.type case runtime(type) type
       )
@@ -353,7 +353,7 @@ fun to_yogurt(
     } else {
       | Lower all cases.
       var cases = map[String, YogurtBody]()
-      var case_types = list[BreakfastType]()
+      var case_types = list[PlumType]()
       for variant in condition_variants do {
         var case_ = switch_.cases.get(variant.key)
         var params = list[YogurtParam]()
@@ -405,7 +405,7 @@ fun to_yogurt(
   case call(call) {
     var name = call.receiver
     var args = list[YogurtId]()
-    var arg_types = list[BreakfastType]()
+    var arg_types = list[PlumType]()
     var arg_params = list[YogurtParam]()
     for arg in call.args do {
       var arg = compiler.lookup(arg)
@@ -435,7 +435,7 @@ fun to_yogurt(
     var symbol = tag.symbol
     
     var args = list[YogurtId]()
-    var arg_types = list[BreakfastType]()
+    var arg_types = list[PlumType]()
     for arg in tag.args do {
       var arg = compiler.lookup(arg)
       var type = builder.get(arg).type
@@ -446,7 +446,7 @@ fun to_yogurt(
     var arg_types = arg_types.to_slice()
 
     YogurtOp.tag(YogurtTag { symbol, args })
-      $ BreakfastType.enum_(map(symbol -> arg_types))
+      $ PlumType.enum_(map(symbol -> arg_types))
   }
 }
 
@@ -582,7 +582,7 @@ fun to_yogurt(
     builder.&.push(
       YogurtOp.instruction(YogurtInstruction {
         instruction = Instruction.crash, args = list(message).to_slice()
-      }) $ BreakfastType.never
+      }) $ PlumType.never
     )
   }
   case type_info {
@@ -601,7 +601,7 @@ fun to_yogurt(
 }
 
 fun compile_cast_fun(
-  yogurt: &Yogurt, from: BreakfastType, to: BreakfastType
+  yogurt: &Yogurt, from: PlumType, to: PlumType
 ): YogurtSignature {
   var signature = yogurt_signature("_cast {from} to {to}", empty_slice[YogurtParam]())
   if yogurt.funs.contains(signature) then return signature
@@ -635,7 +635,7 @@ fun compile_cast_fun(
   signature
 }
 fun compile_cast_fun_body(
-  yogurt: &Yogurt, from: BreakfastType, to: BreakfastType,
+  yogurt: &Yogurt, from: PlumType, to: PlumType,
   builder: &YogurtBodyBuilder, param: YogurtId,
 ): YogurtId {
   if from is never then

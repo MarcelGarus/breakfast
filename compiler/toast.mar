@@ -1,9 +1,9 @@
 | Totally Okay Abstract Syntax Tree  
 | Tree that represents the syntactical language constructs. This data structure
-| should roughly correspond to the content of Breakfast files and be suitable
-| for formatting etc.
+| should roughly correspond to the content of Plum files and be suitable for
+| formatting etc.
 
-import breakfast.mar
+import plum.mar
 
 struct Toast { defs: Slice[ToastDef] }
 enum ToastDef { type: ToastTypeDef, fun_: ToastFun }

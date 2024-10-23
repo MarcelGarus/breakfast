@@ -3,7 +3,7 @@ import * as vs from "vscode";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function activate(_: vs.ExtensionContext) {
-  console.info("Activated Breakfast extension!");
+  console.info("Activated Plum extension!");
 }
 export function deactivate() {
   // TODO: What to do here?

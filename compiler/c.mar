@@ -1,13 +1,13 @@
 | C Source Code  
 
-import breakfast.mar
+import plum.mar
 
 struct CCode { code: String }
 
 fun write[W](writer: W, c: CCode) { writer."{c.code}" }
 
-fun collect_types(yogurt: Yogurt): Set[BreakfastType] {
-  var types = set[BreakfastType]()
+fun collect_types(yogurt: Yogurt): Set[PlumType] {
+  var types = set[PlumType]()
   for fun_ in yogurt.funs do {
     for expr in fun_.value.exprs do {
       var type = expr.type
@@ -17,13 +17,13 @@ fun collect_types(yogurt: Yogurt): Set[BreakfastType] {
   types
 }
 
-fun mangle(type: BreakfastType): String {
+fun mangle(type: PlumType): String {
   var b = string_builder().&
   b."Type_"
   b.mangle(type)
   b.to_string()
 }
-fun mangle[W](writer: W, type: BreakfastType) {
+fun mangle[W](writer: W, type: PlumType) {
   switch type
   case primitive(name) writer."{name}"
   case never writer."never"

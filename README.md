@@ -1,6 +1,6 @@
-# The Breakfast Programming Language
+# The Plum Programming Language
 
-Breakfast is a programming language for writing functional, fast, reusable code.
+Plum is a programming language for writing functional, fast, reusable code.
 
 **Functional**:
 Functions can't have side effects. Data is immutable and acyclic. Code is eagerly evaluated.
@@ -15,7 +15,7 @@ You can write generic code. You can inspect types at compile time.
 
 Type names are always uppercase. Type variables are lowercase. Use `&` to create structs and `|` to create enums.
 
-```breakfast
+```plum
 Json =
   | Int Int
     Map (Map String Json)
@@ -26,7 +26,7 @@ List t = & buffer: (Buffer t) len: Int
 
 Function names are always lowercase or symbols. The signatures of functions have type annotations that allow you to figure out the return type without looking at the body.
 
-```breakfast
+```plum
 + a: Int b: Int = builtins.add a b
 + a: String b: String = builtins.concat a b
 
