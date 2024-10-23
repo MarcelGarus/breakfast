@@ -37,6 +37,8 @@ struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
+fun ==(a: YogurtId, b: YogurtId): Bool { a.int == b.int }
+
 fun yogurt_signature(
   name: String, params: Slice[YogurtParam]
 ): YogurtSignature {

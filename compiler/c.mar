@@ -61,6 +61,13 @@ fun to_c(yogurt: Yogurt): CCode {
     '#include <stdint.h>\n
     '#include <stdio.h>\n
     '#include <stdlib.h>\n
+    '#include <string.h>\n
+    '\n
+    '\n
+    'void out_of_memory() \{\n
+    '    fprintf(stderr, \"Out of memory\");\n
+    '    exit(1);\n
+    '\}\n
     '\n
     '// Types:\n"
 
@@ -72,7 +79,8 @@ fun to_c(yogurt: Yogurt): CCode {
 
   for type in types do {
     b."\n// {type}\n"
-    b."struct {type.mangle()} \{\n"
+    b."struct {type.mangle()} \{\n
+      '    int rc;\n"
     switch type.extend_one_level()
     case primitive(name) {
       if name == "Int" then
@@ -100,6 +108,55 @@ fun to_c(yogurt: Yogurt): CCode {
     }
     case recursive unreachable()
     b."\};\n"
+  }
+
+  b."\n// Reference count operations\n\n"
+
+  for type in types do {
+    b."{type.mangle()}* new_{type.mangle()}();\n"
+    b."void dup_{type.mangle()}({type.mangle()}* value);\n"
+    b."void drop_{type.mangle()}({type.mangle()}* value);\n"
+    b."void free_{type.mangle()}({type.mangle()}* value);\n"
+  }
+
+  for type in types do {
+    b."\n// {type}\n"
+    b."{type.mangle()}* new_{type.mangle()}() \{\n
+      '    // printf(\"new {type}\\n\");\n
+      '    {type.mangle()}* value = malloc(sizeof({type.mangle()}));\n
+      '    if (value == 0) out_of_memory();\n
+      '    value->rc = 1;\n
+      '    return value;\n
+      '\}\n"
+    b."void dup_{type.mangle()}({type.mangle()}* value) \{\n
+      '    value->rc += 1;\n
+      '\}\n"
+    b."void drop_{type.mangle()}({type.mangle()}* value) \{\n
+      '    value->rc -= 1;\n
+      '    if (value->rc == 0) free_{type.mangle()}(value);\n
+      '\}\n"
+    b."void free_{type.mangle()}({type.mangle()}* value) \{\n
+      '    // printf(\"free {type}\\n\");\n"
+    switch type.extend_one_level()
+    case primitive(name) {
+      if name == "String" then {
+        b."    free(value->data);\n"
+      }
+    }
+    case never {}
+    case enum_(variants) {
+      b."    switch (value->tag) \{\n"
+      for variant in variants.iter().enumerate() do {
+        b."        case {variant.index}: // {variant.item.key}\n"
+        for arg in variant.item.value.iter().&.enumerate() do
+          b."            drop_{arg.item.mangle()}(value->as.{variant.item.key}._{arg.index});\n"
+        b."            break;\n"
+      }
+      b."    \}\n"
+    }
+    case recursive unreachable()
+    b."    free(value);\n
+      '\}\n"
   }
 
   b."\n// Function declarations:\n\n"
@@ -144,9 +201,9 @@ fun to_c(yogurt: Yogurt): CCode {
   b."int main(int argc, char** argv) \{\n
     '    Type_Int* _argc = malloc(sizeof(Type_Int));\n
     '    _argc->value = argc;\n
-    '    Type_Int* result;\n
+    '    Type_String* result;\n
     '    result = main_20_Int(_argc);\n
-    '    printf(\"result: %ld\\n\", result->value);\n
+    '    printf(\"%.*s\\n\", (int)result->len, result->data);\n
     '    return 0;\n
     '}\n
     '"
@@ -158,8 +215,8 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
   for id in body.exprs do {
     for i in 0..indentation do writer."    "
     var expr = fun_.get(id)
-    writer."{expr.type.mangle()}* {id.mangle()} = 
-      'malloc(sizeof({expr.type.mangle()})); // {expr.type}\n"
+    writer."{expr.type.mangle()}* {id.mangle()}; // {expr.type}\n"
+    for i in 0..indentation do writer."    "
 
     switch expr.op
     case param panic("param should not exist in body")
@@ -167,13 +224,18 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       writer."// intentionally left blank\n"
     }
     case comptime(value) {
+      writer."{id.mangle()} = new_{expr.type.mangle()}();\n"
       for i in 0..indentation do writer."    "
       switch value.kind
       case int(int) {
         writer."{id.mangle()}->value = {int};\n"
       }
       case string(string) {
-        writer."{id.mangle()}->data = {string.debug()};\n"
+        writer."{id.mangle()}->data = malloc({string.len});\n"
+        for i in 0..indentation do writer."    "
+        writer."if ({id.mangle()}->data == 0) out_of_memory();\n"
+        for i in 0..indentation do writer."    "
+        writer."memcpy({id.mangle()}->data, {string.debug()}, {string.len});\n"
         for i in 0..indentation do writer."    "
         writer."{id.mangle()}->len = {string.len};\n"
       }
@@ -190,7 +252,6 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       }
     }
     case switch_(switch_) {
-      for i in 0..indentation do writer."    "
       var type = fun_.get(switch_.condition).type.enum_.unwrap()
       writer."switch ({switch_.condition.mangle()}->tag) \{\n"
       for case_ in switch_.cases do {
@@ -201,10 +262,13 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
         }
         writer."    case {index}: // {case_.key}\n"
         for param in case_.value.params.iter().&.enumerate() do {
+          var type = fun_.get(param.item).type
           for i in 0..{indentation + 2} do writer."    "
-          writer."{fun_.get(param.item).type.mangle()}* {param.item.mangle()} = 
+          writer."{type.mangle()}* {param.item.mangle()} = 
             '{switch_.condition.mangle()}->as.{case_.key}._{param.index}; 
-            '// {fun_.get(param.item).type}\n"
+            '// {type}\n"
+          for i in 0..{indentation + 2} do writer."    "
+          writer."dup_{type.mangle()}({param.item.mangle()});\n"
         }
         case_.value.to_c(fun_, writer, indentation + 2)
         for i in 0..indentation do writer."    "
@@ -216,6 +280,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       writer."\}\n"
     }
     case tag(tag) {
+      writer."{id.mangle()} = new_{expr.type.mangle()}();\n"
       var index = 0
       for variant in expr.type.enum_.unwrap().iter().&.enumerate() do
         if variant.item.key == tag.symbol then index = variant.index
@@ -224,12 +289,15 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       for arg in tag.args.iter().enumerate() do {
         for i in 0..indentation do writer."    "
         writer."{id.mangle()}->as.{tag.symbol}._{arg.index} = {arg.item.mangle()};\n"
+        for i in 0..indentation do writer."    "
+        writer."dup_{fun_.get(arg.item).type.mangle()}({arg.item.mangle()});\n"
       }
     }
     case call(call) {
-      for i in 0..indentation do writer."    "
-      var arg_types = list[BreakfastType]()
-      for arg in call.args do arg_types.&.push(fun_.get(arg).type)
+      for arg in call.args do {
+        writer."dup_{fun_.get(arg).type.mangle()}({arg.mangle()});\n"
+        for i in 0..indentation do writer."    "
+      }
       writer."{id.mangle()} = {call.receiver.str.mangle()}("
       var first = true
       for arg in call.args do {
@@ -239,6 +307,7 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
       writer.");\n"
     }
     case instruction(instruction) {
+      writer."{id.mangle()} = new_{expr.type.mangle()}();\n"
       for i in 0..indentation do writer."    "
       var args = instruction.args
       switch instruction.instruction
@@ -273,7 +342,15 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
           '{id.mangle()}->tag = 2;\n"
       }
       case concat_strings {
-        writer."TODO: implement concat"
+        writer."{id.mangle()}->len = {args.get(0).mangle()}->len + {args.get(1).mangle()}->len;\n"
+        for i in 0..indentation do writer."    "
+        writer."{id.mangle()}->data = malloc({id.mangle()}->len);\n"
+        for i in 0..indentation do writer."    "
+        writer."if ({id.mangle()}->data == 0) out_of_memory();\n"
+        for i in 0..indentation do writer."    "
+        writer."memcpy({id.mangle()}->data, {args.get(0).mangle()}->data, {args.get(0).mangle()}->len);\n"
+        for i in 0..indentation do writer."    "
+        writer."memcpy({id.mangle()}->data + {args.get(0).mangle()}->len, {args.get(1).mangle()}->data, {args.get(1).mangle()}->len);\n"
       }
       case crash {
         writer."for (int i = 0; i < {args.get(0).mangle()}->len; i++)\n"
@@ -285,5 +362,15 @@ fun to_c[W](body: YogurtBody, fun_: YogurtFun, writer: W, indentation: Int) {
         writer."exit(1);\n"
       }
     }
+  }
+  for id in body.params do {
+    if id == body.returns then continue
+    for i in 0..indentation do writer."    "
+    writer."drop_{fun_.get(id).type.mangle()}({id.mangle()});\n"
+  }
+  for id in body.exprs do {
+    if id == body.returns then continue
+    for i in 0..indentation do writer."    "
+    writer."drop_{fun_.get(id).type.mangle()}({id.mangle()});\n"
   }
 }
