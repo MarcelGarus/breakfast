@@ -18,14 +18,14 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "workspaceContains:**/*.bf"
+    "workspaceContains:**/*.plum"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "grammars": [
       {
         "language": "plum",
-        "scopeName": "source.bf",
+        "scopeName": "source.plum",
         "path": "./plum.tmGrammar.json"
       }
     ],
@@ -42,7 +42,7 @@
       {
         "id": "plum",
         "extensions": [
-          ".bf"
+          ".plum"
         ],
         "aliases": [
           "plum"

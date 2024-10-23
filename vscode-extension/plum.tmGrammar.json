@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "bf",
-  "scopeName": "source.bf",
-  "fileTypes": ["bf"],
+  "name": "plum",
+  "scopeName": "source.plum",
+  "fileTypes": ["plum"],
   "patterns": [
     { "include": "#all" }
   ],
