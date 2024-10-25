@@ -307,10 +307,8 @@ get list: (List t) index: Int -> t =
 
 ####################### Actual program #######################
 
-foo item: Int -> Int =
-  list item 2 3 | get 1
-
 main a: Int -> String =
+  list 1 2 3 | len
   +
     "Hello, world! There are "
     + (a | to_string) " arguments."
