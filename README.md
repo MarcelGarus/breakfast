@@ -1,4 +1,4 @@
-# The Plum Programming Language
+# Plum
 
 Plum is a programming language for writing functional, fast, reusable code.
 
@@ -45,12 +45,3 @@ parse json: Json target: Type -> target =
           ...
         else: crash ...
 ```
-
-## TODO
-
-- think of file ending (.bf?)
-- have some way of explicitly referencing compiler builtins in the language itself
-  ```
-  builtin_add a: Int b: Int = magiccompilerbuiltin Add
-  Int = magiccompilerbuiltin Int
-  ```
