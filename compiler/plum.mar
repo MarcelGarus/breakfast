@@ -1,4 +1,5 @@
 import ../../martinaise/stdlib.mar
+import error.mar
 import builtins.mar
 import bacon.mar
 import toast.mar
@@ -15,29 +16,32 @@ import type.mar
 | - C
 
 fun main(): Never {
-  println("Hello, world!\n")
+  eprintln("Welcome to the Plum compiler!")
 
-  var content = read_file("test.bf") or {
+  var content = read_file("test.plum") or {
     eprintln("Couldn't read file")
     exit(1)
   }
   var content = content.to_string()
 
   var bacon = content.to_bacon()
-  println("Bacon:\n{bacon}\n")
+  | println("Bacon:\n{bacon}\n")
   
-  var toast = bacon.to_toast()
-  println("Toast:\n{toast}\n")
+  var toast = bacon.to_toast() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
+  | println("Toast:\n{toast}\n")
 
   var egg = toast.to_egg()
-  println("Egg:\n{egg}\n")
+  | println("Egg:\n{egg}\n")
 
   var yogurt = egg.to_yogurt()
-  println("Yogurt:\n{yogurt}\n")
+  eprintln("Yogurt:\n{yogurt}\n")
 
   var c = yogurt.to_c()
   write_file("test.c", c.code.bytes())
-  println("\nWrote C code to test.c")
+  eprintln("\nWrote C code to test.c")
 
   exit(0)
 }

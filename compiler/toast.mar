@@ -116,8 +116,15 @@ fun write[W](writer: W, expr: ToastExpr, indentation: Int) {
 | In this file, parsing refers to converting a single line of code into
 | something toasty.
 
-struct Parser { input: String, cursor: Int }
-fun parser(input: String): _ { Parser { input, cursor = 0 } }
+struct Parser { input: String, input_src: Src, cursor: Int }
+fun parser(input: String, src: Src): _ {
+  Parser { input, input_src = src, cursor = 0 }
+}
+fun src_of_rest(parser: Parser): Src {
+  parser.input_src.with_range(
+    {parser.input_src.range.start + parser.cursor}..parser.input_src.range.end
+  )
+}
 fun current(parser: Parser): Char {
   parser.input.chars().get_maybe(parser.cursor) or 0.lower_byte().to_char()
 }
@@ -133,23 +140,27 @@ fun is_done(parser: &Parser): Bool {
   parser.consume_whitespace()
   parser.is_at_end()
 }
-fun consume(parser: &Parser, char: Char): Bool {
+fun consume(parser: &Parser, char: Char): Maybe[Src] {
   parser.consume_whitespace()
-  parser.current() == char or return false
+  parser.current() == char or return none[Src]()
+  var src = parser.input_src.with_range(
+    {parser.input_src.range.start + parser.cursor} ..+ 1)
   parser.advance()
-  true
+  some(src)
 }
-fun consume(parser: &Parser, prefix: String): Bool {
+fun consume(parser: &Parser, prefix: String): Maybe[Src] {
   parser.consume_whitespace()
   var start = parser.cursor
   for char in prefix.chars() do {
     parser.current() == char or {
       parser.cursor = start
-      return false
+      return none[Src]()
     }
     parser.advance()
   }
-  true
+  some(
+    parser.input_src.with_range({parser.input_src.range.start + start} ..+ 1)
+  )
 }
 fun parse_int(parser: &Parser): Maybe[Int] {
   parser.consume_whitespace()
@@ -164,17 +175,31 @@ fun parse_int(parser: &Parser): Maybe[Int] {
   if start == parser.cursor then return none[Int]()
   some(num)
 }
-fun parse_string(parser: &Parser): Maybe[String] {
-  parser.consume(#") or return none[String]()
+
+fun no_match[T](): Result[Maybe[T], Error] {
+  ok[Maybe[T], Error](none[T]())
+}
+fun bad_input[T](error: Error): Result[Maybe[T], Error] {
+  error[Maybe[T], Error](error)
+}
+fun parsed[T](value: T): Result[Maybe[T], Error] {
+  ok[Maybe[T], Error](some(value))
+}
+
+fun parse_string(parser: &Parser): Result[Maybe[String], Error] {
+  parser.consume(#") or return no_match[String]()
   var start = parser.cursor
   loop {
-    if parser.is_at_end() then panic("string doesn't end until end of input")
+    if parser.is_at_end() then
+      return bad_input[String](error(
+        "string doesn't end until end of input", parser.src_of_rest()
+      ))
     if parser.current() == #" then break
     parser.advance()
   }
   var end = parser.cursor
   parser.advance() | consume the "
-  some(parser.input.substr(start..end))
+  parsed(parser.input.substr(start..end))
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/<>"
 fun parse_identifier(parser: &Parser): Maybe[String] {
@@ -204,181 +229,273 @@ fun parse_symbol(parser: &Parser): Maybe[String] {
   parser.parse_identifier()
 }
 | Parses an expression that doesn't include whitespace (except in parentheses).
-fun parse_atom(parser: &Parser): Maybe[ToastExpr] {
-  if parser.consume(#() then {
-    var expr = parser.parse_expr() or panic("expected expr")
-    parser.consume(#)) or panic("expected closing parenthesis")
-    return some(expr)
+fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+  if parser.consume(#() is some(paren_src) then {
+    var expr = parser.parse_expr()? or
+      return bad_input[ToastExpr](error(
+        "Expected expression after parenthesis.", paren_src
+      ))
+    parser.consume(#)) or
+      return bad_input[ToastExpr](error(
+        "Expected the closing parenthesis.",
+        parser.src_of_rest()
+      ))
+    return parsed(expr)
   }
-  if parser.parse_int() is some(int) then return some(ToastExpr.int(int))
-  if parser.parse_string() is some(str) then return some(ToastExpr.string(str))
-  if parser.parse_name() is some(name) then return some(ToastExpr.name(name))
-  if parser.parse_symbol() is some(symbol) then return some(ToastExpr.symbol(symbol))
-  none[ToastExpr]()
+  if parser.parse_int() is some(int) then return parsed(ToastExpr.int(int))
+  if parser.parse_string()? is some(str) then return parsed(ToastExpr.string(str))
+  if parser.parse_name() is some(name) then return parsed(ToastExpr.name(name))
+  if parser.parse_symbol() is some(symbol) then return parsed(ToastExpr.symbol(symbol))
+  no_match[ToastExpr]()
 }
 | Parses an expression that doesn't contain pipes (except in parentheses).
-fun parse_unpiped_expr(parser: &Parser): Maybe[ToastExpr] {
-  var expr = parser.parse_atom() or return none[ToastExpr]()
+fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+  var expr = parser.parse_atom()? or return no_match[ToastExpr]()
 
   var args = list[ToastExpr]()
-  loop args.&.push(parser.parse_atom() or break)
+  loop args.&.push(parser.parse_atom()? or break)
   if args.is_not_empty() then
     expr = ToastExpr.call(ToastCall {
       receiver = expr.put_on_heap(), args = args.to_slice()
     })
 
-  some(expr)
+  parsed(expr)
 }
-fun parse_expr(parser: &Parser): Maybe[ToastExpr] {
-  var expr = parser.parse_unpiped_expr() or return none[ToastExpr]()
+fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+  var expr = parser.parse_unpiped_expr()? or return no_match[ToastExpr]()
 
   loop {
     parser.consume(#|) or break
-    var piped_into = parser.parse_unpiped_expr() or panic("expected expression")
+    var piped_into = parser.parse_unpiped_expr()? or
+      return bad_input[ToastExpr](error(
+        "Expected expression", parser.src_of_rest()
+      ))
     expr = piped_call(expr, piped_into)
   }
-  if parser.consume(#=) then {
+  if parser.consume(#=) is some(equals_src) then {
     var cursor_after_equals_sign = parser.cursor
-    if parser.parse_expr() is some(value) then
-      expr = ToastExpr.var_(create_var(expr, value))
+    if parser.parse_expr()? is some(value) then
+      expr = ToastExpr.var_(create_var(expr, value, equals_src)?)
     else
       parser.cursor = cursor_after_equals_sign - 1
   }
 
-  some(expr)
+  parsed(expr)
 }
-fun parse_type_atom(parser: &Parser): Maybe[ToastType] {
-  if parser.consume(#() then {
-    var type = parser.parse_type_expr() or panic("expected type expr")
-    parser.consume(#)) or panic("expected closing parenthesis")
-    return some(type)
+fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
+  if parser.consume(#() is some(paren_src) then {
+    var type = parser.parse_type_expr()? or
+      return bad_input[ToastType](error(
+        "Expected expression after parenthesis.", paren_src
+      ))
+    parser.consume(#)) or
+      return bad_input[ToastType](error(
+        "Expected a closing parenthesis.", parser.src_of_rest()
+      ))
+    return parsed(type)
   }
   if parser.parse_symbol() is some(name) then
-    return some(ToastType.call(ToastTypeCall {
+    return parsed(ToastType.call(ToastTypeCall {
       name, args = empty_slice[ToastType]()
     }))
   if parser.parse_name() is some(name) then
-    return some(ToastType.variable(name))
-  none[ToastType]()
+    return parsed(ToastType.variable(name))
+  no_match[ToastType]()
 }
-fun parse_type_expr(parser: &Parser): Maybe[ToastType] {
+fun parse_type_expr(parser: &Parser): Result[Maybe[ToastType], Error] {
   if parser.parse_symbol() is some(name) then {
     var args = list[ToastType]()
-    loop args.&.push(parser.parse_type_atom() or break)
-    return some(ToastType.call(ToastTypeCall { name, args = args.to_slice() }))
+    loop args.&.push(parser.parse_type_atom()? or break)
+    return parsed(ToastType.call(ToastTypeCall { name, args = args.to_slice() }))
   }
-  if parser.parse_type_atom() is some(type) then return some(type)
-  none[ToastType]()
+  if parser.parse_type_atom()? is some(type) then return parsed(type)
+  no_match[ToastType]()
 }
 
-fun create_var(left: ToastExpr, right: ToastExpr): ToastVar {
+fun create_var(
+  left: ToastExpr, right: ToastExpr, equals_src: Src
+): Result[ToastVar, Error] {
   switch left
   case name(name)
-    ToastVar { name, value = right.put_on_heap() }
-  default panic("variables can only have a name on the left side")
+    ok[ToastVar, Error](ToastVar { name, value = right.put_on_heap() })
+  default
+    error[ToastVar, Error](error(
+      "variables can only have a name on the left side", equals_src
+    ))
 }
 
-fun to_toast_type(bacon: Bacon): ToastType {
+fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
   if bacon.line == "|" then {
     var variants = map[String, Slice[ToastType]]()
     for variant in bacon.children do {
-      var parser = parser(variant.line)
-      var name = parser.&.parse_symbol() or panic("expected variant name")
+      var parser = parser(variant.line, variant.src)
+      var name = parser.&.parse_symbol() or
+        return error[ToastType, Error](error(
+          "Expected variant name.", parser.src_of_rest()
+        ))
       var args =
         if variant.children.is_empty() then {
           var args = list[ToastType]()
-          loop args.&.push(parser.&.parse_type_atom() or break)
-          parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+          loop args.&.push(parser.&.parse_type_atom()? or break)
+          parser.&.is_done() or
+            return error[ToastType, Error](error(
+              "Additional garbage on line.", parser.src_of_rest()
+            ))
           args.to_slice()
         } else {
-          parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-          variant.children.to_toast_types()
+          parser.&.is_done() or
+            return error[ToastType, Error](error(
+              "Additional garbage on line.", parser.src_of_rest()
+            ))
+          variant.children.to_toast_types()?
         }
       variants.&.put(name, args)
     }
-    ToastType.enum_(variants)
+    ok[ToastType, Error](ToastType.enum_(variants))
   } else {
-    var parser = parser(bacon.line)
+    var parser = parser(bacon.line, bacon.src)
     if bacon.children.is_empty() then {
-      var type = parser.&.parse_type_expr() or panic("expected type expr")
-      parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-      type
+      var type = parser.&.parse_type_expr()? or
+        return error[ToastType, Error](error(
+          "expected type expr", parser.src_of_rest()
+        ))
+      parser.&.is_done() or
+        return error[ToastType, Error](error(
+          "Additional garbage on line", parser.src_of_rest()
+        ))
+      ok[ToastType, Error](type)
     } else {
-      var name = parser.&.parse_symbol() or panic("expected type symbol (coz children)")
-      parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-      var args = bacon.children.to_toast_types()
-      ToastType.call(ToastTypeCall { name, args })
+      var name = parser.&.parse_symbol() or
+        return error[ToastType, Error](error(
+          "Expected type symbol (coz children)", parser.src_of_rest()
+        ))
+      parser.&.is_done() or
+        return error[ToastType, Error](error(
+          "Additional garbage on line", parser.src_of_rest()
+        ))
+      var args = bacon.children.to_toast_types()?
+      ok[ToastType, Error](ToastType.call(ToastTypeCall { name, args }))
     }
   }
 }
-fun to_toast_types(bacons: Slice[Bacon]): Slice[ToastType] {
+fun to_toast_types(bacons: Slice[Bacon]): Result[Slice[ToastType], Error] {
   var types = list[ToastType]()
-  for bacon in bacons do types.&.push(bacon.to_toast_type())
-  types.to_slice()
+  for bacon in bacons do types.&.push(bacon.to_toast_type()?)
+  ok[Slice[ToastType], Error](types.to_slice())
 }
-fun to_toast_type_def(bacon: Bacon): Maybe[ToastTypeDef] {
-  var parser = parser(bacon.line)
-  var name = parser.&.parse_symbol() or return none[ToastTypeDef]()
+fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
+  var parser = parser(bacon.line, bacon.src)
+  var name = parser.&.parse_symbol() or return no_match[ToastTypeDef]()
   var params = list[String]()
   loop params.&.push(parser.&.parse_name() or break)
-  parser.&.consume(#=) or panic("expected = after type signature")
+  parser.&.consume(#=) or
+    return bad_input[ToastTypeDef](error(
+      "expected = after type signature", parser.src_of_rest()
+    ))
   var type =
     if bacon.children.is_empty() then {
-      var type = parser.&.parse_type_expr() or panic("expected type expr")
-      parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+      var type = parser.&.parse_type_expr()? or
+        return bad_input[ToastTypeDef](error(
+          "Expected type expression.", parser.src_of_rest()
+        ))
+      parser.&.is_done() or
+        return bad_input[ToastTypeDef](error(
+          "Additional garbage on line.", parser.src_of_rest()
+        ))
       type
     } else {
-      parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-      bacon.children.len == 1 or panic("type def, but {bacon.children.len} types given")
-      bacon.children.get(0).to_toast_type()
+      parser.&.is_done() or
+        return bad_input[ToastTypeDef](error(
+          "Additional garbage on line.", parser.src_of_rest()
+        ))
+      bacon.children.len == 1 or
+        return bad_input[ToastTypeDef](error(
+          "Type definition, but it has {bacon.children.len} children.",
+          bacon.src.with_range(
+            bacon.children.first().src.range.start
+              ..bacon.children.last().src.range.end
+          ),
+        ))
+      bacon.children.get(0).to_toast_type()?
     }
-  some(ToastTypeDef { name, params = params.to_slice(), type })
+  parsed(ToastTypeDef { name, params = params.to_slice(), type })
 }
 
-fun to_toast_expr(bacon: Bacon): Maybe[ToastExpr] {
-  var parser = parser(bacon.line)
-  if parser.&.consume(##) then return none[ToastExpr]()
-  var expr = parser.&.parse_expr() or panic("expected expression")
-  var children = bacon.children.to_toast_exprs()
-  if parser.&.consume(#=) then
-    expr = ToastExpr.var_(create_var(expr, ToastExpr.body(children)))
+fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
+  var parser = parser(bacon.line, bacon.src)
+  if parser.&.consume(##) is some then return no_match[ToastExpr]()
+  var expr = parser.&.parse_expr()? or
+    return bad_input[ToastExpr](error(
+      "Expected expression", parser.src_of_rest()
+    ))
+  var children = bacon.children.to_toast_exprs()?
+  if parser.&.consume(#=) is some(equals_src) then
+    expr = ToastExpr.var_(
+      create_var(expr, ToastExpr.body(children), equals_src)?
+    )
   else if children.is_not_empty() then
     expr = ToastExpr.call(ToastCall {
       receiver = expr.put_on_heap(), args = children
     })
-  parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}, expr = {expr.debug()}")
-  some(expr)
+  parser.&.is_done() or
+    return bad_input[ToastExpr](error(
+      "Additional garbage on line.", parser.src_of_rest()
+    ))
+  parsed(expr)
 }
-fun parse_switch(bacon: Bacon, condition: ToastExpr): Maybe[ToastExpr] {
-  bacon.line == "%" or return none[ToastExpr]()
+fun parse_switch(
+  bacon: Bacon, condition: ToastExpr
+): Result[Maybe[ToastExpr], Error] {
+  bacon.line == "%" or return no_match[ToastExpr]()
   var cases = list[ToastCase]()
   for case_ in bacon.children do {
-    var parser = parser(case_.line)
-    var symbol = parser.&.parse_symbol() or panic("expected symbol of case")
+    var parser = parser(case_.line, case_.src)
+    var symbol = parser.&.parse_symbol() or
+      return bad_input[ToastExpr](error(
+        "Expected the symbol of a case.", parser.src_of_rest()
+      ))
     var params = list[String]()
     loop params.&.push(parser.&.parse_name() or break)
-    parser.&.consume(#:) or panic("expected colon")
+    parser.&.consume(#:) or
+      return bad_input[ToastExpr](error(
+        "Expected a colon.", parser.src_of_rest()
+      ))
     var body =
       if parser.cursor == parser.input.len then {
-        ToastExpr.body(case_.children.to_toast_exprs())
+        ToastExpr.body(case_.children.to_toast_exprs()?)
       } else {
-        var expr = parser.&.parse_expr() or panic("expected case expression")
-        parser.&.is_done() or panic("additional garbage on case line: {parser.input} cursor = {parser.cursor..parser.input.len}")
-        case_.children.is_empty() or panic("case that is neither single- nor multi-line")
+        var expr = parser.&.parse_expr()? or
+          return bad_input[ToastExpr](error(
+            "Expected a case expression.", parser.src_of_rest()
+          ))
+        parser.&.is_done() or
+          return bad_input[ToastExpr](error(
+            "There's additional garbage on a case line.", parser.src_of_rest()
+          ))
+        case_.children.is_empty() or
+          return bad_input[ToastExpr](error(
+            "A case is neither single- nor multi-line.", parser.src_of_rest()
+          ))
         expr
       }
     cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
   }
-  some(ToastExpr.switch_(ToastSwitch {
+  parsed(ToastExpr.switch_(ToastSwitch {
     condition = condition.put_on_heap(), cases = cases.to_slice()
   }))
 }
-fun parse_pipe(bacon: Bacon, previous: ToastExpr): Maybe[ToastExpr] {
-  bacon.line == "|" or return none[ToastExpr]()
-  var children = bacon.children.to_toast_exprs()
-  children.len == 1 or panic("pipe with multiple children")
+fun parse_pipe(
+  bacon: Bacon, previous: ToastExpr
+): Result[Maybe[ToastExpr], Error] {
+  bacon.line == "|" or return no_match[ToastExpr]()
+  var children = bacon.children.to_toast_exprs()?
+  children.len == 1 or
+    return bad_input[ToastExpr](error(
+      "Pipe with multiple children",
+      bacon.src.with_range(bacon.src.range.start..{bacon.src.range.start + 1})
+    ))
   var piped_into = children.get(0)
-  some(piped_call(previous, piped_into))
+  parsed(piped_call(previous, piped_into))
 }
 fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
   if piped_into is call(call) then {
@@ -392,17 +509,17 @@ fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
       receiver = piped_into.put_on_heap(), args = list(left).to_slice()
     })
 }
-fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
+fun to_toast_exprs(bacons: Slice[Bacon]): Result[Slice[ToastExpr], Error] {
   var exprs = list[ToastExpr]()
   var i = 0
   loop {
     var bacon = bacons.get_maybe(i) or break
-    var expr = bacon.to_toast_expr() or { i = i + 1  continue }
+    var expr = bacon.to_toast_expr()? or { i = i + 1  continue }
 
     loop {
       var next = bacons.get_maybe(i + 1) or break
-      if      next.parse_switch(expr) is some(new) then { expr = new }
-      else if next.parse_pipe(expr)   is some(new) then { expr = new }
+      if      next.parse_switch(expr)? is some(new) then { expr = new }
+      else if next.parse_pipe(expr)?   is some(new) then { expr = new }
       else break
       i = i + 1
     }
@@ -410,50 +527,72 @@ fun to_toast_exprs(bacons: Slice[Bacon]): Slice[ToastExpr] {
     exprs.&.push(expr)
     i = i + 1
   }
-  exprs.to_slice()
+  ok[Slice[ToastExpr], Error](exprs.to_slice())
 }
-fun to_toast_fun_def(bacon: Bacon): Maybe[ToastFun] {
-  var parser = parser(bacon.line)
-  var name = parser.&.parse_name() or return none[ToastFun]()
+fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
+  var parser = parser(bacon.line, bacon.src)
+  var name = parser.&.parse_name() or return no_match[ToastFun]()
   var params = list[ToastParam]()
   loop {
     var name = parser.&.parse_name() or break
-    parser.&.consume(#:) or panic("expected : after param {name}")
-    var type = parser.&.parse_type_atom() or panic("expected type of param {name}")
+    parser.&.consume(#:) or
+      return bad_input[ToastFun](error(
+        "Expected : after param {name}.", parser.src_of_rest()
+      ))
+    var type = parser.&.parse_type_atom()? or
+      return bad_input[ToastFun](error(
+        "Expected type of param {name}", parser.src_of_rest()
+      ))
     params.&.push(ToastParam { name, type })
   }
-  parser.&.consume("->") or panic("expected ->")
-  var return_type = parser.&.parse_type_atom() or panic("expected return type")
-  parser.&.consume(#=) or panic("expected =")
+  parser.&.consume("->") or
+    return bad_input[ToastFun](error(
+      "Expected ->", parser.src_of_rest()
+    ))
+  var return_type = parser.&.parse_type_atom()? or
+    return bad_input[ToastFun](error(
+      "expected return type",
+      parser.src_of_rest()
+    ))
+  parser.&.consume(#=) or
+    return bad_input[ToastFun](error(
+      "expected =", parser.src_of_rest()
+    ))
 
   var body =
     if bacon.children.is_empty() then {
-      var body = parser.&.parse_expr() or panic("expected fun body")
-      parser.&.is_done() or panic("additional garbage on line: {parser.input} cursor = {parser.cursor..parser.input.len}")
+      var body = parser.&.parse_expr()? or
+        return bad_input[ToastFun](error(
+          "Expected fun body.", parser.src_of_rest()
+        ))
+      parser.&.is_done() or
+        return bad_input[ToastFun](error(
+          "Additional garbage on line.", parser.src_of_rest()
+        ))
       body
     } else
-      ToastExpr.body(bacon.children.to_toast_exprs())
+      ToastExpr.body(bacon.children.to_toast_exprs()?)
 
-  some(ToastFun { name, params = params.to_slice(), return_type, body })
+  parsed(ToastFun { name, params = params.to_slice(), return_type, body })
 }
 
-fun to_toast(bacon: Bacon): Toast {
+fun to_toast(bacon: Bacon): Result[Toast, Error] {
   bacon.line.is_empty() or panic("to_toast was given non-root Bacon")
 
   var defs = list[ToastDef]()
   for bacon in bacon.children do {
-    if bacon.to_toast_type_def() is some(def) then {
+    if bacon.to_toast_type_def()? is some(def) then {
       defs.&.push(ToastDef.type(def))
       continue
     }
-    if bacon.to_toast_fun_def() is some(def) then {
+    if bacon.to_toast_fun_def()? is some(def) then {
       defs.&.push(ToastDef.fun_(def))
       continue
     }
     if bacon.line.starts_with("#") then continue
 
-    panic("couldn't parse line: {bacon.line}")
+    return error[Toast, Error](error("Couldn't parse line.", bacon.src))
   }
 
-  Toast { defs = defs.to_slice() }
+  ok[Toast, Error](Toast { defs = defs.to_slice() })
 }

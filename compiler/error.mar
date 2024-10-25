@@ -1,0 +1,45 @@
+import plum.mar
+
+struct Src { file_content: String, range: Range[Int] }
+
+fun invalid_src(): Src {
+  Src { file_content = "<invalid>", range = 0..0 }
+}
+fun with_range(src: Src, range: Range[Int]): Src {
+  Src { file_content = src.file_content, range }
+}
+fun write[W](writer: W, src: Src) {
+  writer."{src.range.start} – {src.range.end}"
+}
+
+struct Error { message: String, src: Src }
+
+fun error(message: String, src: Src): Error {
+  Error { message, src }
+}
+fun write[W](writer: W, error: Error) {
+  var lines = error.src.file_content.lines()
+  var total_offset = 0
+  var error_line_index = 0
+  var offset_in_error_line = 0
+  for line in lines.iter().enumerate() do {
+    var offset_after = total_offset + line.item.len + 1
+    if offset_after > error.src.range.start then {
+      | We've found the error line!
+      error_line_index = line.index
+      offset_in_error_line = error.src.range.start - total_offset
+      break
+    }
+    total_offset = offset_after
+  }
+
+  var num_lines_to_show = min(5, error_line_index)
+  var first_line_to_show = error_line_index - num_lines_to_show + 1
+  for line_number in first_line_to_show ..+ num_lines_to_show do
+    writer."{"{line_number}".pad_left(4)} | {lines.get(line_number)}\n"
+
+  writer."       "
+  for i in 0..offset_in_error_line do writer." "
+  for i in error.src.range do writer."^"
+  writer."\n{error.message}"
+}
