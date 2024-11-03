@@ -570,6 +570,42 @@ fun to_yogurt(
         instruction = Instruction.mod_ints, args = list(a, b).to_slice()
       }) $ type_int)
     }
+    case and_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() & b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.and_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case or_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            or(a.kind.int.unwrap(), b.kind.int.unwrap())
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.or_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case xor_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() ^ b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.xor_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
     case compare_ints {
       var a = params.get(0)
       var b = params.get(1)
