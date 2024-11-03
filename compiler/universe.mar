@@ -1,4 +1,129 @@
+| The VM, universe, and byte code  
+| All Plum objects (including source code) are owned by a universe. First, you
+| create a universe using the big_bang function. Only then can you compile code
+| into that universe. You can then call the compiled functions.
+|
+| Internally, calling code runs a stack-based virtual machine (VM), something
+| like a mini-computer implemented in software. The VM has its own data and call
+| stack and operates on instructions (called byte code). To see how Yogurt gets
+| converted into instructions for this  byte code, check out to_byte_code.mar.
+
 import plum.mar
+
+struct Universe { objects: List[Object] }
+
+struct ObjectId { int: Int } | index in the objects list
+enum Object {
+  int: Int,
+  string: String,
+  tag: TagObject,
+  code: CodeObject, | code from one compilation unit
+}
+struct TagObject { symbol: String, args: Slice[ObjectId] }
+struct CodeObject { funs: List[FunCode] }
+struct FunId { int: Int } | index in a code's functions list
+struct FunCode { name: String, instructions: Slice[ByteCodeInstruction] }
+enum ByteCodeInstruction {
+  push_object: ObjectId,
+  push_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
+  pop_n_below_top: Int, | pops n objects, skipping the top object
+  jump: Int, | jumps to the given instruction index inside this function
+  jump_table: Map[String, Int], | peeks at the top value (a tag). depending on the symbol, jumps to different instruction indices
+  tag: Tuple2[String, Int], | symbol and number of arguments
+  untag, | consumes a tag, pushes all its args on the stack
+  call: FunId, | calls another function from the same compilation unit
+  add_ints,
+  sub_ints,
+  mul_ints,
+  div_ints,
+  mod_ints,
+  and_ints,
+  or_ints,
+  xor_ints,
+  compare_ints,
+  concat_strings,
+  crash,
+}
+
+fun big_bang(): Universe { Universe { objects = list[Object]() } }
+
+fun new(universe: &Universe, object: Object): ObjectId {
+  var id = universe.objects.len
+  universe.objects.&.push(object)
+  ObjectId { int = id }
+}
+fun get(universe: Universe, id: ObjectId): Object {
+  universe.objects.get(id.int)
+}
+fun get(code: CodeObject, id: FunId): FunCode { code.funs.get(id.int) }
+
+fun write[W](writer: W, universe: Universe) {
+  writer."Universe:"
+  for object in universe.objects.iter().enumerate() do {
+    writer."\n{ObjectId { int = object.index }}: "
+    writer.write(object.item)
+  }
+}
+fun write[W](writer: W, id: ObjectId) { writer."#{id.int}" }
+fun write[W](writer: W, object: Object) {
+  switch object
+  case int(int) writer."{int}"
+  case string(string) writer."{string.debug()}"
+  case tag(tag) {
+    writer."({tag.symbol}"
+    for arg in tag.args do writer." {arg}"
+    writer.")"
+  }
+  case code(code) writer."{code}"
+}
+fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
+  switch universe.get(id)
+  case int(int) writer."{int}"
+  case string(string) writer."{string.debug()}"
+  case tag(tag) {
+    writer."({tag.symbol}"
+    for arg in tag.args do {
+      writer." "
+      writer.write_deep(arg, universe)
+    }
+    writer.")"
+  }
+  case code(code) writer."{code}"
+}
+fun write[W](writer: W, code: CodeObject) {
+  for fun_ in code.funs.iter().enumerate() do {
+    writer."\n  {FunId { int = fun_.index }} ({fun_.item.name}):"
+    for instruction in fun_.item.instructions.iter().enumerate() do {
+      writer."\n    {"{instruction.index}".pad_left(3)} | {instruction.item}"
+    }
+  }
+}
+fun write[W](writer: W, id: FunId) { writer."fun-{id.int}" }
+fun write[W](writer: W, instruction: ByteCodeInstruction) {
+  switch instruction
+  case push_object(id) writer."push {id}"
+  case push_from_stack(n) writer."push top - {n}"
+  case pop_n_below_top(n) writer."pop {n} below top"
+  case jump(index) writer."jump to {index}"
+  case jump_table(table) {
+    writer."jump to:"
+    for entry in table do writer."\n        |   {entry.key} -> {entry.value}"
+  }
+  case tag(tag) writer."tag {tag.a} with {tag.b} args"
+  case untag writer."untag"
+  case call(function) writer."call {function}"
+  case add_ints writer."add_ints"
+  case sub_ints writer."sub_ints"
+  case mul_ints writer."mul_ints"
+  case div_ints writer."div_ints"
+  case mod_ints writer."mod_ints"
+  case and_ints writer."and_ints"
+  case or_ints writer."or_ints"
+  case xor_ints writer."xor_ints"
+  case compare_ints writer."compare_ints"
+  case concat_strings writer."concat_strings"
+  case crash writer."crash"
+}
 
 struct MainFun { code: ObjectId, id: FunId }
 

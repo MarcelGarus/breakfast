@@ -6,7 +6,7 @@ import bacon.mar
 import toast.mar
 import egg.mar
 import yogurt.mar
-import to_byte_code.mar
+import universe.mar
 import vm.mar
 
 | Compiler Stages:
@@ -14,7 +14,7 @@ import vm.mar
 | - Toast
 | - Egg
 | - Yogurt
-| - Byte Code
+| - Byte Code in the universe of objects
 
 fun main(): Never {
   eprintln("Welcome to the Plum compiler!")
