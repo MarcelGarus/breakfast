@@ -81,9 +81,8 @@ fun write[W](writer: W, type: PlumType) {
 | Never          -> Never         ? {}
 | | Foo Bar      -> | Foo Bar Baz ? {}
 fun match_against(
-  concrete: PlumType, generic: PlumType
+  concrete: PlumType, generic: PlumType, constraints: TypeVariableConstraints
 ): Maybe[Substitutions] {
-  var constraints = constraints()
   concrete.match_against(
     generic, constraints.&,
     list[Tuple2[PlumType, PlumType]]().&
@@ -91,9 +90,9 @@ fun match_against(
   constraints.check_coherency()
 }
 fun match_against(
-  concrete: Slice[PlumType], generic: Slice[PlumType]
+  concrete: Slice[PlumType], generic: Slice[PlumType],
+  constraints: TypeVariableConstraints
 ): Maybe[Substitutions] {
-  var constraints = constraints()
   concrete.match_against(
     generic, constraints.&,
     list[Tuple2[PlumType, PlumType]]().&
@@ -110,6 +109,9 @@ fun constraints(): TypeVariableConstraints {
   TypeVariableConstraints {
     constraints = list[Tuple2[String, PlumType]]()
   }
+}
+fun add(constraints: &TypeVariableConstraints, name: String, type: PlumType) {
+  constraints.constraints.&.push(tuple(name, type))
 }
 fun check_coherency(
   constraints: TypeVariableConstraints
@@ -158,7 +160,7 @@ fun match_against_logic(
   case primitive(generic_name) {
     var is_type_variable = generic_name.chars().get(0).is_upper().not()
     if is_type_variable then {
-      constraints.constraints.&.push(tuple(generic_name, concrete))
+      constraints.add(generic_name, concrete)
       true
     } else {
       var concrete_name = concrete.primitive or return false

@@ -18,9 +18,10 @@ import plum.mar
 struct Egg { funs: List[EggFun] }
 
 struct EggFun {
-  name: StringAndSrc, params: Slice[PlumType], return_type: PlumType,
+  name: StringAndSrc, params: Slice[EggParam], return_type: PlumType,
   impl: EggFunImpl
 }
+struct EggParam { name: String, type: PlumType }
 enum EggFunImpl { code: EggCode, builtin: Builtin }
 struct EggCode { exprs: Slice[EggExpr], body: EggBody }
 struct EggId { int: Int }
@@ -40,6 +41,8 @@ struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggTag { symbol: String, args: Slice[EggId] }
 struct EggCall { receiver: StringAndSrc, args: Slice[EggId] }
 
+fun /(name: String, type: PlumType): EggParam { EggParam { name, type } }
+
 fun @(kind: EggExprKind, src: Src): EggExpr { EggExpr { kind, src } }
 
 fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
@@ -51,7 +54,7 @@ fun write[W](writer: W, egg: Egg) {
   var first = true
   for fun_ in egg.funs do {
     if first then first = false else writer."\n"
-    writer."{fun_.name}"
+    writer."{fun_.name.string}"
     for param in fun_.params do writer." {param}"
     writer." -> {fun_.return_type} ="
     switch fun_.impl
@@ -72,8 +75,11 @@ fun write[W](writer: W, body: EggBody, code: EggCode, indentation: Int) {
   for i in 0..indentation do writer."  "
   writer."{body.returns}"
 }
+fun write[W](writer: W, param: EggParam) {
+  writer."{param.name}: {param.type}"
+}
 fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
-  switch expr
+  switch expr.kind
   case int(int) writer."int {int}"
   case string(string) writer."string {string.debug()}"
   case symbol(symbol) writer."symbol {symbol}"
@@ -88,7 +94,7 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
     }
   }
   case call(call) {
-    writer."call {call.receiver}"
+    writer."call {call.receiver.string}"
     for arg in call.args do writer." {arg}"
   }
   case tag(tag) {
@@ -152,9 +158,9 @@ fun to_egg(toast: Toast): Result[Egg, Error] {
       funs.&.push(EggFun {
         name = fun_.name,
         params = {
-          var params = list[PlumType]()
+          var params = list[EggParam]()
           for param in fun_.params do
-            params.&.push(param.type.to_egg(toast)?)
+            params.&.push(param.name.string / param.type.to_egg(toast)?)
           params.to_slice()
         },
         return_type = fun_.return_type.to_egg(toast)?,
