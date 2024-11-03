@@ -8,6 +8,13 @@ fun invalid_src(): Src {
 fun with_range(src: Src, range: Range[Int]): Src {
   Src { file_content = src.file_content, range }
 }
+fun ...(a: Src, b: Src): Src {
+  | TODO: assert that they are from the same file
+  Src {
+    file_content = a.file_content,
+    range = a.range.start..b.range.end,
+  }
+}
 fun write[W](writer: W, src: Src) {
   writer."{src.range.start} – {src.range.end}"
 }
@@ -33,6 +40,7 @@ fun write[W](writer: W, error: Error) {
     total_offset = offset_after
   }
 
+  println("error in line {error_line_index}")
   var num_lines_to_show = min(5, error_line_index)
   var first_line_to_show = error_line_index - num_lines_to_show + 1
   for line_number in first_line_to_show ..+ num_lines_to_show do

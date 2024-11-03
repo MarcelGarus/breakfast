@@ -119,12 +119,15 @@ fun write[W](writer: W, value: YogurtValue) {
 | the name and argument types.
 
 struct EggLookupResult { fun_: EggFun, substitutions: Substitutions }
-fun lookup(egg: Egg, name: String, args: Slice[PlumType]): EggLookupResult {
+fun lookup(
+  egg: Egg, name: String, args: Slice[PlumType]
+): Result[EggLookupResult, String] {
   var name_matches = list[EggFun]()
   for fun_ in egg.funs do
-    if fun_.name == name then
+    if fun_.name.string == name then
       name_matches.&.push(fun_)
-  if name_matches.is_empty() then panic("there is no function named {name}")
+  if name_matches.is_empty() then
+    return error[EggLookupResult, String]("There is no function named {name.debug()}.")
 
   var full_matches = list[Tuple2[EggFun, Substitutions]]()
   for fun_ in name_matches do {
@@ -134,21 +137,22 @@ fun lookup(egg: Egg, name: String, args: Slice[PlumType]): EggLookupResult {
   }
 
   if full_matches.is_empty() then
-    panic("there is no matching function named {name} for the args {args}")
+    return error[EggLookupResult, String](
+      "There is no matching function named {name} for the args {args}.")
   if full_matches.len > 1 then
-    panic({
+    return error[EggLookupResult, String]({
       var b = string_builder().&
       b."multiple functions match {name} {args}:"
       for match in full_matches do
-        b."\n  {match.a.name} {match.a.params}  (with {match.b.debug()})"
+        b."\n  {match.a.name.string} {match.a.params}  (with {match.b.debug()})"
       b.to_string()
     })
   var fun_and_substitutions = full_matches.get(0)
 
-  EggLookupResult {
+  ok[EggLookupResult, String](EggLookupResult {
     fun_          = fun_and_substitutions.a,
     substitutions = fun_and_substitutions.b,
-  }
+  })
 }
 
 | Convert Egg to Yogurt  
@@ -205,21 +209,23 @@ fun lookup(compiler: YogurtCodeCompiler, egg_id: EggId): YogurtId {
   compiler.egg_to_yogurt.get(egg_id)
 }
 
-fun to_yogurt(egg: Egg): Yogurt {
-  var main = egg.lookup("main", list(type_int).to_slice())
+fun to_yogurt(egg: Egg): Result[Yogurt, Error] {
+  var main = egg.lookup("main", list(type_int).to_slice()) or
+    return error[Yogurt, Error](error("No main function.", invalid_src()))
   var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
   main.fun_.to_yogurt(
     list(YogurtParam.runtime(type_int)).to_slice(),
     "main", egg, yogurt.&
-  )
-  yogurt
+  )?
+  ok[Yogurt, Error](yogurt)
 }
 fun to_yogurt(
   egg_fun: EggFun, params: Slice[YogurtParam], name: String,
   egg: Egg, yogurt: &Yogurt
-): YogurtFun {
+): Result[YogurtFun, Error] {
   var signature = yogurt_signature(name, params)
-  if yogurt.funs.get_maybe(signature) is some(fun_) then return fun_
+  if yogurt.funs.get_maybe(signature) is some(fun_) then
+    return ok[YogurtFun, Error](fun_)
   println("Compiling {signature}")
 
   | Put a temporary placeholder in the Yogurt. Recursive calls won't analyze the
@@ -240,7 +246,7 @@ fun to_yogurt(
       var compiler = YogurtCodeCompiler {
         egg, code, yogurt, egg_to_yogurt = map[EggId, YogurtId]()
       }
-      var body = code.body.to_yogurt(params, builder.&, compiler.&)
+      var body = code.body.to_yogurt(params, builder.&, compiler.&)?
 
       | Check that the return type matches what the function claims it is.
       var param_types = list[PlumType]()
@@ -253,9 +259,12 @@ fun to_yogurt(
       var actual_return_type = builder.get(body.returns).type
       if claimed_return_type != actual_return_type then {
         actual_return_type.is_assignable_to(claimed_return_type) or
-          panic("return types don't match:\n
+          return error[YogurtFun, Error](error(
+            "Return types don't match:\n
             'claimed type: {claimed_return_type}\n
-            ' actual type: {actual_return_type}")
+            ' actual type: {actual_return_type}",
+            egg_fun.name.src
+          ))
 
         var body_with_cast = list[YogurtId]()
         for id in body.exprs do body_with_cast.&.push(id)
@@ -274,20 +283,20 @@ fun to_yogurt(
 
       YogurtFun { exprs = builder.exprs.to_slice(), body }
     }
-    case builtin(builtin) builtin.to_yogurt(params, egg, yogurt)
+    case builtin(builtin) builtin.to_yogurt(params, egg, yogurt)?
 
   println("Done compiling {signature}")
 
   yogurt.funs.&.put(signature, fun_)
-  fun_
+  ok[YogurtFun, Error](fun_)
 }
 
 fun to_yogurt(
   body: EggBody, params: Slice[YogurtParam],
   builder: &YogurtFunBuilder, compiler: &YogurtCodeCompiler
-): YogurtBody {
+): Result[YogurtBody, Error] {
   params.len == body.params.len or
-    panic("body params len doesn't matche number of param types")
+    panic("body params len doesn't match the number of param types")
   var param_ids = list[YogurtId]()
   for i in 0..body.params.len do {
     var egg_id = body.params.get(i)
@@ -297,157 +306,171 @@ fun to_yogurt(
   }
   var exprs = list[YogurtId]()
   for egg_id in body.exprs do {
-    var expr = compiler.code.get(egg_id).to_yogurt(builder, compiler)
+    var expr = compiler.code.get(egg_id).to_yogurt(builder, compiler)?
     var yogurt_id = builder.push(expr)
     exprs.&.push(yogurt_id)
     compiler.add_mapping(egg_id, yogurt_id)
   }
-  YogurtBody {
+  ok[YogurtBody, Error](YogurtBody {
     params = param_ids.to_slice(),
     exprs = exprs.to_slice(),
     returns = compiler.lookup(body.returns),
-  }
+  })
 }
 fun to_yogurt(
   expr: EggExpr, builder: &YogurtFunBuilder, compiler: &YogurtCodeCompiler
-): YogurtExpr {
-  switch expr
-  case int(int) yogurt_value_int(int).to_expr()
-  case string(string) yogurt_value_string(string).to_expr()
-  case symbol(symbol) yogurt_value_symbol(symbol).to_expr()
-  case param unreachable()
-  case switch_(switch_) {
-    var condition = compiler.lookup(switch_.condition)
-    var condition_expr = builder.get(condition)
-    var condition_type = condition_expr.type.extend_one_level()
-    var condition_variants = condition_type.enum_
-      or panic("switched on non-enum: {condition_type}")
+): Result[YogurtExpr, Error] {
+  ok[YogurtExpr, Error](
+    switch expr.kind
+    case int(int) yogurt_value_int(int).to_expr()
+    case string(string) yogurt_value_string(string).to_expr()
+    case symbol(symbol) yogurt_value_symbol(symbol).to_expr()
+    case param unreachable()
+    case switch_(switch_) {
+      var condition = compiler.lookup(switch_.condition)
+      var condition_expr = builder.get(condition)
+      var condition_type = condition_expr.type.extend_one_level()
+      var condition_variants = condition_type.enum_
+        or return error[YogurtExpr, Error](error(
+          "Switched on non-enum: {condition_type}", expr.src
+        ))
 
-    | Make sure all variants are handled, that no extra variants are handled,
-    | and that the number of parameters of each case match the variant args.
-    for variant in condition_variants do
-      switch_.cases.contains(variant.key) or
-        panic("you switch on {condition_type}, but you don't handle the {variant.key} variant")
-    for case_ in switch_.cases do
-      condition_variants.contains(case_.key) or
-        panic("you switch on {condition_type} and you try to handle the non-existent {case_.key} variant")
-    for case_ in switch_.cases do {
-      var variant_args = condition_variants.get(case_.key)
-      var case_params = case_.value.params
-      variant_args.len == case_params.len or
-        panic("{case_.key} has {variant_args.len} args, but your case binds {case_params.len}")
-    }
-
-    if false then { | condition_expr.op is comptime(value)
-      unreachable()
-      | Only compile the corresponding branch.
-      | var tag = value.kind.tag.unwrap()
-      | var case_ = switch_.cases.get(tag.a)
-      | if tag.b.len > 0 then todo("handle comptime switch with variant args")
-      | for egg_id in case_.exprs do {
-      |   var expr = compiler.code.get(egg_id).to_yogurt(builder, compiler)
-      |   var yogurt_id = builder.push(expr)
-      |   exprs.&.push(yogurt_id)
-      |   compiler.add_mapping(egg_id, yogurt_id)
-      | }
-    } else {
-      | Lower all cases.
-      var cases = map[String, YogurtBody]()
-      var case_types = list[PlumType]()
-      for variant in condition_variants do {
-        var case_ = switch_.cases.get(variant.key)
-        var params = list[YogurtParam]()
-        for arg in variant.value do params.&.push(YogurtParam.runtime(arg))
-        var body = case_.to_yogurt(params.to_slice(), builder, compiler)
-        cases.&.put(variant.key, body)
-        case_types.&.push(builder.get(body.returns).type)
+      | Make sure all variants are handled, that no extra variants are handled,
+      | and that the number of parameters of each case match the variant args.
+      for variant in condition_variants do
+        switch_.cases.contains(variant.key) or
+          return error[YogurtExpr, Error](error(
+            "you switch on {condition_type}, but you don't handle the {variant.key} variant",
+            expr.src
+          ))
+      for case_ in switch_.cases do
+        condition_variants.contains(case_.key) or
+          return error[YogurtExpr, Error](error(
+            "you switch on {condition_type} and you try to handle the non-existent {case_.key} variant",
+            expr.src
+          ))
+      for case_ in switch_.cases do {
+        var variant_args = condition_variants.get(case_.key)
+        var case_params = case_.value.params
+        variant_args.len == case_params.len or
+          return error[YogurtExpr, Error](error(
+            "{case_.key} has {variant_args.len} args, but your case binds {case_params.len}",
+            expr.src
+          ))
       }
 
-      | Find the common type of all branches.
-      var common_type = join(case_types.to_slice())
-        or panic("Couldn't join types {case_types}")
-
-      | Add cast expressions where necessary.
-      for case_ in cases do {
-        var case_expr = builder.get(case_.value.returns)
-        var case_type = case_expr.type
-        if case_type != common_type then {
-          eprintln("Insert cast from {case_type} to {common_type}")
-          var old_body = case_.value
-          var new_exprs = list[YogurtId]()
-          for expr in old_body.exprs do new_exprs.&.push(expr)
-          var new_returns =
-            | TODO: What if we cast (| Foo (| True False)) to
-            | (| Foo (| True False Bar))?
-            if case_expr.op is comptime(value)
-            then builder.push(YogurtValue {
-              type = common_type, kind = value.kind
-            }.to_expr())
-            else {
-              var cast_fun =
-                compiler.yogurt.compile_cast_fun(case_type, common_type)
-              builder.push(YogurtOp.call(YogurtCall {
-                receiver = cast_fun, args = list(old_body.returns).to_slice()
-              }) $ common_type)
-            }
-          new_exprs.&.push(new_returns)
-          cases.&.put(case_.key, YogurtBody {
-            params = old_body.params,
-            exprs = new_exprs.to_slice(),
-            returns = new_returns,
-          })
+      if false then { | condition_expr.op is comptime(value)
+        unreachable()
+        | Only compile the corresponding branch.
+        | var tag = value.kind.tag.unwrap()
+        | var case_ = switch_.cases.get(tag.a)
+        | if tag.b.len > 0 then todo("handle comptime switch with variant args")
+        | for egg_id in case_.exprs do {
+        |   var expr = compiler.code.get(egg_id).to_yogurt(builder, compiler)
+        |   var yogurt_id = builder.push(expr)
+        |   exprs.&.push(yogurt_id)
+        |   compiler.add_mapping(egg_id, yogurt_id)
+        | }
+      } else {
+        | Lower all cases.
+        var cases = map[String, YogurtBody]()
+        var case_types = list[PlumType]()
+        for variant in condition_variants do {
+          var case_ = switch_.cases.get(variant.key)
+          var params = list[YogurtParam]()
+          for arg in variant.value do params.&.push(YogurtParam.runtime(arg))
+          var body = case_.to_yogurt(params.to_slice(), builder, compiler)?
+          cases.&.put(variant.key, body)
+          case_types.&.push(builder.get(body.returns).type)
         }
+
+        | Find the common type of all branches.
+        var common_type = join(case_types.to_slice())
+          or return error[YogurtExpr, Error](error("Couldn't join types {case_types}", expr.src))
+
+        | Add cast expressions where necessary.
+        for case_ in cases do {
+          var case_expr = builder.get(case_.value.returns)
+          var case_type = case_expr.type
+          if case_type != common_type then {
+            eprintln("Insert cast from {case_type} to {common_type}")
+            var old_body = case_.value
+            var new_exprs = list[YogurtId]()
+            for expr in old_body.exprs do new_exprs.&.push(expr)
+            var new_returns =
+              | TODO: What if we cast (| Foo (| True False)) to
+              | (| Foo (| True False Bar))?
+              if case_expr.op is comptime(value)
+              then builder.push(YogurtValue {
+                type = common_type, kind = value.kind
+              }.to_expr())
+              else {
+                var cast_fun =
+                  compiler.yogurt.compile_cast_fun(case_type, common_type)
+                builder.push(YogurtOp.call(YogurtCall {
+                  receiver = cast_fun, args = list(old_body.returns).to_slice()
+                }) $ common_type)
+              }
+            new_exprs.&.push(new_returns)
+            cases.&.put(case_.key, YogurtBody {
+              params = old_body.params,
+              exprs = new_exprs.to_slice(),
+              returns = new_returns,
+            })
+          }
+        }
+
+        YogurtOp.switch_(YogurtSwitch { condition, cases }) $ common_type
       }
-
-      YogurtOp.switch_(YogurtSwitch { condition, cases }) $ common_type
     }
-  }
-  case call(call) {
-    var name = call.receiver
-    var args = list[YogurtId]()
-    var arg_types = list[PlumType]()
-    var arg_params = list[YogurtParam]()
-    for arg in call.args do {
-      var arg = compiler.lookup(arg)
-      var type = builder.get(arg).type
-      args.&.push(arg)
-      arg_types.&.push(type)
-      arg_params.&.push(
-        if builder.get(arg).op is comptime(value)
-        then YogurtParam.comptime(value)
-        else YogurtParam.runtime(type)
-      )
+    case call(call) {
+      var name = call.receiver
+      var args = list[YogurtId]()
+      var arg_types = list[PlumType]()
+      var arg_params = list[YogurtParam]()
+      for arg in call.args do {
+        var arg = compiler.lookup(arg)
+        var type = builder.get(arg).type
+        args.&.push(arg)
+        arg_types.&.push(type)
+        arg_params.&.push(
+          if builder.get(arg).op is comptime(value)
+          then YogurtParam.comptime(value)
+          else YogurtParam.runtime(type)
+        )
+      }
+      var args = args.to_slice()
+      var arg_types = arg_types.to_slice()
+      var arg_params = arg_params.to_slice()
+
+      var result = compiler.egg.lookup(name.string, arg_types) or(error)
+        return error[YogurtExpr, Error](error(error, name.src))
+
+      result.fun_.to_yogurt(arg_params, name.string, compiler.egg, compiler.yogurt)
+      var return_type = result.fun_.return_type.specialize(result.substitutions)
+
+      YogurtOp.call(YogurtCall {
+        receiver = yogurt_signature(name.string, arg_params), args
+      }) $ return_type
     }
-    var args = args.to_slice()
-    var arg_types = arg_types.to_slice()
-    var arg_params = arg_params.to_slice()
+    case tag(tag) {
+      var symbol = tag.symbol
 
-    var result = compiler.egg.lookup(name, arg_types)
+      var args = list[YogurtId]()
+      var arg_types = list[PlumType]()
+      for arg in tag.args do {
+        var arg = compiler.lookup(arg)
+        var type = builder.get(arg).type
+        args.&.push(arg)
+        arg_types.&.push(type)
+      }
+      var args = args.to_slice()
+      var arg_types = arg_types.to_slice()
 
-    result.fun_.to_yogurt(arg_params, name, compiler.egg, compiler.yogurt)
-    var return_type = result.fun_.return_type.specialize(result.substitutions)
-
-    YogurtOp.call(YogurtCall {
-      receiver = yogurt_signature(name, arg_params), args
-    }) $ return_type
-  }
-  case tag(tag) {
-    var symbol = tag.symbol
-    
-    var args = list[YogurtId]()
-    var arg_types = list[PlumType]()
-    for arg in tag.args do {
-      var arg = compiler.lookup(arg)
-      var type = builder.get(arg).type
-      args.&.push(arg)
-      arg_types.&.push(type)
+      YogurtOp.tag(YogurtTag { symbol, args })
+        $ PlumType.enum_(map(symbol -> arg_types))
     }
-    var args = args.to_slice()
-    var arg_types = arg_types.to_slice()
-
-    YogurtOp.tag(YogurtTag { symbol, args })
-      $ PlumType.enum_(map(symbol -> arg_types))
-  }
+  )
 }
 
 struct YogurtBodyBuilder { parent: &YogurtFunBuilder, body: List[YogurtId] }
@@ -461,7 +484,7 @@ fun get(body: YogurtBodyBuilder, id: YogurtId): YogurtExpr {
 }
 fun to_yogurt(
   builtin: Builtin, arg_types: Slice[YogurtParam], egg: Egg, yogurt: &Yogurt
-): YogurtFun {
+): Result[YogurtFun, Error] {
   var signature = yogurt_signature("builtin_{builtin}", arg_types)
 
   var fun_builder = yogurt_fun_builder()
@@ -472,132 +495,136 @@ fun to_yogurt(
   for i in 0..arg_types.len do
     params.&.push(body.parent.&.push(arg_types.get(i).to_expr()))
   var params = params.to_slice()
-  var returns = builtin.to_yogurt(body.&, params)
+  var returns = builtin.to_yogurt(body.&, params) or(error)
+    return error[YogurtFun, Error](error(error, invalid_src()))
   var fun_ = YogurtFun {
     exprs = fun_builder.exprs.to_slice(),
     body = YogurtBody { params, exprs = body.body.to_slice(), returns }
   }
 
   yogurt.funs.&.put(signature, fun_)
-  fun_
+  ok[YogurtFun, Error](fun_)
 }
 fun to_yogurt(
   builtin: Builtin, builder: &YogurtBodyBuilder, params: Slice[YogurtId]
-): YogurtId {
-  switch builtin
-  case add_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_int(
-          a.kind.int.unwrap() + b.kind.int.unwrap()
-        ).to_expr())
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.add_ints, args = list(a, b).to_slice()
-    }) $ type_int)
-  }
-  case sub_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_int(
-          a.kind.int.unwrap() - b.kind.int.unwrap()
-        ).to_expr())
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.sub_ints, args = list(a, b).to_slice()
-    }) $ type_int)
-  }
-  case mul_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_int(
-          a.kind.int.unwrap() * b.kind.int.unwrap()
-        ).to_expr())
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.mul_ints, args = list(a, b).to_slice()
-    }) $ type_int)
-  }
-  case div_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_int(
-          a.kind.int.unwrap() / b.kind.int.unwrap()
-        ).to_expr())
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.div_ints, args = list(a, b).to_slice()
-    }) $ type_int)
-  }
-  case mod_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_int(
-          a.kind.int.unwrap() % b.kind.int.unwrap()
-        ).to_expr())
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.mod_ints, args = list(a, b).to_slice()
-    }) $ type_int)
-  }
-  case compare_ints {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then {
-        var symbol =
-          switch a.kind.int.unwrap() <=> b.kind.int.unwrap()
-          case less "Less"
-          case equal "Equal"
-          case greater "Greater"
-        return builder.&.push(YogurtOp.comptime(yogurt_value_symbol(symbol))
-          $ type_ordering)
-      }
-    builder.&.push(
-      YogurtOp.instruction(YogurtInstruction {
-        instruction = Instruction.compare_ints, args = list(a, b).to_slice()
-      }) $ type_ordering
-    )
-  }
-  case concat_strings {
-    var a = params.get(0)
-    var b = params.get(1)
-    if builder.get(a).op is comptime(a) then
-      if builder.get(b).op is comptime(b) then
-        return builder.&.push(yogurt_value_string(
-          "{a.kind.string.unwrap()}{b.kind.string.unwrap()}"
-        ).to_expr())
+): Result[YogurtId, String] {
+  ok[YogurtId, String](
+    switch builtin
+    case add_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() + b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.add_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case sub_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() - b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.sub_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case mul_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() * b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.mul_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case div_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() / b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.div_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case mod_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_int(
+            a.kind.int.unwrap() % b.kind.int.unwrap()
+          ).to_expr()))
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.mod_ints, args = list(a, b).to_slice()
+      }) $ type_int)
+    }
+    case compare_ints {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then {
+          var symbol =
+            switch a.kind.int.unwrap() <=> b.kind.int.unwrap()
+            case less "Less"
+            case equal "Equal"
+            case greater "Greater"
+          return ok[YogurtId, String](builder.&.push(
+            YogurtOp.comptime(yogurt_value_symbol(symbol)) $ type_ordering
+          ))
+        }
+      builder.&.push(
+        YogurtOp.instruction(YogurtInstruction {
+          instruction = Instruction.compare_ints, args = list(a, b).to_slice()
+        }) $ type_ordering
+      )
+    }
+    case concat_strings {
+      var a = params.get(0)
+      var b = params.get(1)
+      if builder.get(a).op is comptime(a) then
+        if builder.get(b).op is comptime(b) then
+          return ok[YogurtId, String](builder.&.push(yogurt_value_string(
+            "{a.kind.string.unwrap()}{b.kind.string.unwrap()}"
+          ).to_expr()))
 
-    builder.&.push(YogurtOp.instruction(YogurtInstruction {
-      instruction = Instruction.concat_strings, args = list(a, b).to_slice()
-    }) $ type_string)
-  }
-  case crash {
-    var message = params.get(0)
-    builder.&.push(
-      YogurtOp.instruction(YogurtInstruction {
-        instruction = Instruction.crash, args = list(message).to_slice()
-      }) $ PlumType.never
-    )
-  }
-  case type_info {
-    var type = builder.get(params.get(0)).op.comptime or
-      panic("type_info called on Type that's not comptime")
-    var symbol =
-      switch type.kind.type.unwrap()
-      case primitive(name) "{name}"
-      case never "Never"
-      case enum_ "Enum"
-      case recursive unreachable()
-    builder.&.push(YogurtOp.comptime(yogurt_value_symbol(symbol))
-      $ type_type_info)
-  }
-  default todo("implement builtin {builtin}")
+      builder.&.push(YogurtOp.instruction(YogurtInstruction {
+        instruction = Instruction.concat_strings, args = list(a, b).to_slice()
+      }) $ type_string)
+    }
+    case crash {
+      var message = params.get(0)
+      builder.&.push(
+        YogurtOp.instruction(YogurtInstruction {
+          instruction = Instruction.crash, args = list(message).to_slice()
+        }) $ PlumType.never
+      )
+    }
+    case type_info {
+      var type = builder.get(params.get(0)).op.comptime or
+        return error[YogurtId, String]("type_info called on Type that's not comptime")
+      var symbol =
+        switch type.kind.type.unwrap()
+        case primitive(name) "{name}"
+        case never "Never"
+        case enum_ "Enum"
+        case recursive unreachable()
+      builder.&.push(YogurtOp.comptime(yogurt_value_symbol(symbol))
+        $ type_type_info)
+    }
+    default todo("implement builtin {builtin}")
+  )
 }
 
 fun compile_cast_fun(

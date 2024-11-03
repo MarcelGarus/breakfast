@@ -18,7 +18,7 @@ import plum.mar
 struct Egg { funs: List[EggFun] }
 
 struct EggFun {
-  name: String, params: Slice[PlumType], return_type: PlumType,
+  name: StringAndSrc, params: Slice[PlumType], return_type: PlumType,
   impl: EggFunImpl
 }
 enum EggFunImpl { code: EggCode, builtin: Builtin }
@@ -26,7 +26,8 @@ struct EggCode { exprs: Slice[EggExpr], body: EggBody }
 struct EggId { int: Int }
 struct EggBody { params: Slice[EggId], exprs: Slice[EggId], returns: EggId }
 
-enum EggExpr {
+struct EggExpr { kind: EggExprKind, src: Src }
+enum EggExprKind {
   param,
   int: Int,
   string: String,
@@ -37,7 +38,9 @@ enum EggExpr {
 }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggTag { symbol: String, args: Slice[EggId] }
-struct EggCall { receiver: String, args: Slice[EggId] }
+struct EggCall { receiver: StringAndSrc, args: Slice[EggId] }
+
+fun @(kind: EggExprKind, src: Src): EggExpr { EggExpr { kind, src } }
 
 fun ==(a: EggId, b: EggId): Bool { a.int == b.int }
 fun hash(hasher: &Hasher, id: EggId) { hasher.hash(id.int) }
@@ -140,7 +143,7 @@ fun restore(visible: &Visible, snapshot: VisibleSnapshot) {
 
 | Converting Toast To Egg  
 
-fun to_egg(toast: Toast): Egg {
+fun to_egg(toast: Toast): Result[Egg, Error] {
   var funs = list[EggFun]()
 
   for builtin in builtins do funs.&.push(builtin.create_builtin_fun())
@@ -151,108 +154,115 @@ fun to_egg(toast: Toast): Egg {
         params = {
           var params = list[PlumType]()
           for param in fun_.params do
-            params.&.push(param.type.to_egg(toast))
+            params.&.push(param.type.to_egg(toast)?)
           params.to_slice()
         },
-        return_type = fun_.return_type.to_egg(toast),
+        return_type = fun_.return_type.to_egg(toast)?,
         impl = EggFunImpl.code({
           var visible = visible()
           var compiler = egg_code_compiler().&
           var body = compiler.egg_body_compiler().&
 
           for param in fun_.params do
-            visible.&.define(param.name, body.push_param())
-          var returned = fun_.body.to_egg(body, visible.&)
+            visible.&.define(param.name.string, body.push_param(param.name.src))
+          var returned = fun_.body.to_egg(body, visible.&)?
           var body = body.finish(returned)
 
-          EggCode {
-            exprs = compiler.exprs.to_slice(),
-            body,
-          }
+          EggCode { exprs = compiler.exprs.to_slice(), body }
         })
       })
 
-  Egg { funs }
+  ok[Egg, Error](Egg { funs })
 }
 
-fun to_egg(type: ToastType, toast: Toast): PlumType {
+fun to_egg(type: ToastType, toast: Toast): Result[PlumType, Error] {
   type.to_egg(toast, map[String, PlumType](), list[OngoingTypeCall](), 0)
 }
 struct OngoingTypeCall { depth: Int, name: String, args: Slice[PlumType] }
 fun to_egg(
   type: ToastType, toast: Toast, env: Map[String, PlumType],
   parent_calls: List[OngoingTypeCall], depth: Int,
-): PlumType {
+): Result[PlumType, Error] {
   switch type
   case variable(variable)
-    if env.get_maybe(variable) is some(type)
-    then type
-    else PlumType.primitive(variable)
+    ok[PlumType, Error](
+      if env.get_maybe(variable.string) is some(type)
+      then type
+      else PlumType.primitive(variable.string)
+    )
   case call(call) {
     var name = call.name
-    
+
     | Lower the arguments.
     var args = list[PlumType]()
     for arg in call.args do
-      args.&.push(arg.to_egg(toast, env, parent_calls, depth))
+      args.&.push(arg.to_egg(toast, env, parent_calls, depth)?)
     var args = args.to_slice()
 
     | Handle builtin types.
-    if name == "Int" then {
-      call.args.is_empty() or panic("called Int with args")
-      return type_int
+    if name.string == "Int" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called Int with args", name.src))
+      return ok[PlumType, Error](type_int)
     }
-    if name == "String" then {
-      call.args.is_empty() or panic("called String with args")
-      return type_string
+    if name.string == "String" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called String with args", name.src))
+      return ok[PlumType, Error](type_string)
     }
-    if name == "Type" then {
-      call.args.is_empty() or panic("called Type with args")
-      return type_type
+    if name.string == "Type" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called Type with args", name.src))
+      return ok[PlumType, Error](type_type)
     }
-    if name == "Never" then {
-      call.args.is_empty() or panic("called Never with args")
-      return type_never
+    if name.string == "Never" then {
+      call.args.is_empty() or
+        return return error[PlumType, Error](error("Called Never with args", name.src))
+      return ok[PlumType, Error](type_never)
     }
 
     | Are we recursively lowering a type? If so, we need to insert a recursive
     | type instead of endlessly digging down into the type.
     for call in parent_calls do
-      if call.name == name and call.args == args then
-        return PlumType.recursive(depth - call.depth)
+      if call.name == name.string and call.args == args then
+        return ok[PlumType, Error](PlumType.recursive(depth - call.depth))
 
     | Look for a user-defined type with the name.
     for def in toast.defs do
       if def is type(def) then
-        if def.name == name then {
+        if def.name.string == name.string then {
           var inner_env = map[String, PlumType]()
           def.params.len == args.len or
-            panic("tried to instantiate {def.name} with {args.len} args, but it needs {def.params.len}")
+            return error[PlumType, Error](error(
+              "Tried to instantiate {def.name.string} with {args.len} args, but it needs {def.params.len}.",
+              name.src
+            ))
           for both in zip(def.params.iter(), args.iter()) do
-            inner_env.&.put(both.a, both.b)
-          parent_calls.&.push(OngoingTypeCall { name, args, depth })
-          var type = def.type.to_egg(toast, inner_env, parent_calls, depth)
+            inner_env.&.put(both.a.string, both.b)
+          parent_calls.&.push(OngoingTypeCall { name = name.string, args, depth })
+          var type = def.type.to_egg(toast, inner_env, parent_calls, depth)?
           parent_calls.&.pop()
-          return type
+          return ok[PlumType, Error](type)
         }
-    panic("{name} doesn't exist")
+    return error[PlumType, Error](error("{name.string} doesn't exist.", name.src))
   }
   case enum_(enum_) {
     var variants = map[String, Slice[PlumType]]()
     for variant in enum_ do {
       var args = list[PlumType]()
-      for arg in variant.value do
-        args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1))
-      variants.&.put(variant.key, args.to_slice())
+      for arg in variant.args do
+        args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1)?)
+      | TODO: check for duplicates
+      variants.&.put(variant.name.string, args.to_slice())
     }
-    PlumType.enum_(variants)
+    ok[PlumType, Error](PlumType.enum_(variants))
   }
 }
 
 fun create_builtin_fun(builtin: Builtin): EggFun {
   var signature = builtin.signature()
   EggFun {
-    name = "builtin_{builtin}",
+    name = "builtin_{builtin}" @ invalid_src(),
     params = signature.params,
     return_type = signature.return_type,
     impl = EggFunImpl.builtin(builtin),
@@ -272,9 +282,9 @@ fun finish(body: EggBodyCompiler, id: EggId): EggBody {
     params = body.params.to_slice(), exprs = body.exprs.to_slice(), returns = id
   }
 }
-fun push_param(body: &EggBodyCompiler): EggId {
+fun push_param(body: &EggBodyCompiler, src: Src): EggId {
   var id = EggId { int = body.parent.exprs.len }
-  body.parent.exprs.&.push(EggExpr.param)
+  body.parent.exprs.&.push(EggExprKind.param @ src)
   body.params.&.push(id)
   id
 }
@@ -285,46 +295,55 @@ fun push(body: &EggBodyCompiler, expr: EggExpr): EggId {
   id
 }
 
-fun to_egg(toast: ToastExpr, body: &EggBodyCompiler, visible: &Visible): EggId {
-  switch toast
-  case int(int) body.push(EggExpr.int(int))
-  case string(str) body.push(EggExpr.string(str))
-  case symbol(symbol) body.push(EggExpr.symbol(symbol))
-  case name(name)
-    visible.lookup(name) or panic("unknown referenced name {name}")
-  case switch_(switch_) {
-    var condition = switch_.condition.to_egg(body, visible)
-    var cases = map[String, EggBody]()
-    for case_ in switch_.cases do {
-      var snapshot = visible.snapshot()
-      var case_body = body.parent.egg_body_compiler().&
-      for param in case_.params do
-        visible.define(param, case_body.push_param())
-      var returns = case_.body.to_egg(case_body, visible)
-      var case_body = case_body.finish(returns)
-      visible.restore(snapshot)
-      cases.&.put(case_.symbol, case_body)
+fun to_egg(
+  toast: ToastExpr, body: &EggBodyCompiler, visible: &Visible
+): Result[EggId, Error] {
+  ok[EggId, Error](
+    switch toast.kind
+    case int(int) body.push(EggExprKind.int(int) @ toast.src)
+    case string(str) body.push(EggExprKind.string(str) @ toast.src)
+    case symbol(symbol) body.push(EggExprKind.symbol(symbol) @ toast.src)
+    case name(name)
+      visible.lookup(name) or
+        return error[EggId, Error](error(
+          "Unknown referenced name {name}.", toast.src
+        ))
+    case switch_(switch_) {
+      var condition = switch_.condition.to_egg(body, visible)?
+      var cases = map[String, EggBody]()
+      for case_ in switch_.cases do {
+        var snapshot = visible.snapshot()
+        var case_body = body.parent.egg_body_compiler().&
+        for param in case_.params do
+          visible.define(param.string, case_body.push_param(param.src))
+        var returns = case_.body.to_egg(case_body, visible)?
+        var case_body = case_body.finish(returns)
+        visible.restore(snapshot)
+        cases.&.put(case_.symbol.string, case_body)
+      }
+      body.push(EggExprKind.switch_(EggSwitch { condition, cases }) @ toast.src)
     }
-    body.push(EggExpr.switch_(EggSwitch { condition, cases }))
-  }
-  case call(call) {
-    var args = list[EggId]()
-    for arg in call.args do args.&.push(arg.to_egg(body, visible))
-    var args = args.to_slice()
+    case call(call) {
+      var args = list[EggId]()
+      for arg in call.args do args.&.push(arg.to_egg(body, visible)?)
+      var args = args.to_slice()
 
-    switch call.receiver.*
-    case name(receiver) body.push(EggExpr.call(EggCall { receiver, args }))
-    case symbol(symbol) body.push(EggExpr.tag(EggTag { symbol, args }))
-    default panic("called non-name {call.receiver.debug()}")
-  }
-  case var_(var_) {
-    var value = var_.value.to_egg(body, visible)
-    visible.define(var_.name, value)
-    value
-  }
-  case body(exprs) {
-    var last = none[EggId]()
-    for expr in exprs do last = some(expr.to_egg(body, visible))
-    last or panic("empty body")
-  }
+      switch call.receiver.kind
+      case name(receiver) body.push(EggExprKind.call(EggCall { receiver = receiver @ toast.src, args }) @ toast.src)
+      case symbol(symbol) body.push(EggExprKind.tag(EggTag { symbol, args }) @ toast.src)
+      default return error[EggId, Error](error(
+        "You can only call names.", call.receiver.src
+      ))
+    }
+    case var_(var_) {
+      var value = var_.value.to_egg(body, visible)?
+      visible.define(var_.name, value)
+      value
+    }
+    case body(exprs) {
+      var last = none[EggId]()
+      for expr in exprs do last = some(expr.to_egg(body, visible)?)
+      last or unreachable()
+    }
+  )
 }

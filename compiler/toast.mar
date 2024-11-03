@@ -1,29 +1,36 @@
 | Totally Okay Abstract Syntax Tree  
 | Tree that represents the syntactical language constructs. This data structure
-| should roughly correspond to the content of Plum files and be suitable for
-| formatting etc.
+| should roughly correspond to the content of Plum files.
+| TODO: In the long term, we should move the Toast closer to the original source
+| code – for example, by representing pipes and calls differently. This then
+| allows us to use the Toast for formatting. Then, we should be able to not save
+| the Src in every tree node, but only in the leaves.
 
 import plum.mar
 
 struct Toast { defs: Slice[ToastDef] }
 enum ToastDef { type: ToastTypeDef, fun_: ToastFun }
 
-struct ToastTypeDef { name: String, params: Slice[String], type: ToastType }
-enum ToastType {
-  variable: String,
-  call: ToastTypeCall,
-  enum_: Map[String, Slice[ToastType]],
+struct ToastTypeDef {
+  name: StringAndSrc, params: Slice[StringAndSrc], type: ToastType
 }
-struct ToastTypeCall { name: String, args: Slice[ToastType] }
+enum ToastType {
+  variable: StringAndSrc,
+  call: ToastTypeCall,
+  enum_: List[ToastTypeCase],
+}
+struct ToastTypeCall { name: StringAndSrc, args: Slice[ToastType] }
+struct ToastTypeCase { name: StringAndSrc, args: Slice[ToastType] }
 
 struct ToastFun {
-  name: String,
+  name: StringAndSrc,
   params: Slice[ToastParam],
   return_type: ToastType,
   body: ToastExpr,
 }
-struct ToastParam { name: String, type: ToastType }
-enum ToastExpr {
+struct ToastParam { name: StringAndSrc, type: ToastType }
+struct ToastExpr { kind: ToastExprKind, src: Src }
+enum ToastExprKind {
   int: Int,
   string: String,
   symbol: String,
@@ -34,9 +41,14 @@ enum ToastExpr {
   body: Slice[ToastExpr],
 }
 struct ToastSwitch { condition: &ToastExpr, cases: Slice[ToastCase] }
-struct ToastCase { symbol: String, params: Slice[String], body: ToastExpr }
+struct ToastCase { symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr }
 struct ToastCall { receiver: &ToastExpr, args: Slice[ToastExpr] }
 struct ToastVar { name: String, value: &ToastExpr }
+
+struct StringAndSrc { string: String, src: Src }
+
+fun @(kind: ToastExprKind, src: Src): ToastExpr { ToastExpr { kind, src } }
+fun @(string: String, src: Src): _ { StringAndSrc { string, src } }
 
 fun write[W](writer: W, toast: Toast) {
   var first = true
@@ -83,10 +95,10 @@ fun write[W](writer: W, body: Slice[ToastExpr], indentation: Int) {
   }
 }
 fun write[W](writer: W, expr: ToastExpr, indentation: Int) {
-  if not(expr is body) then
+  if not(expr.kind is body) then
     for i in 0..indentation do writer."  "
-  switch expr
-  case int(int) writer."{int}"
+  switch expr.kind
+  case int(int) writer."{int} @ {expr.src}"
   case string(str) writer."\"{str}\""
   case symbol(symbol) writer."{symbol}"
   case name(name) writer."{name}"
@@ -119,6 +131,15 @@ fun write[W](writer: W, expr: ToastExpr, indentation: Int) {
 struct Parser { input: String, input_src: Src, cursor: Int }
 fun parser(input: String, src: Src): _ {
   Parser { input, input_src = src, cursor = 0 }
+}
+fun src_of(parser: Parser, cursor_range: Range[Int]): Src {
+  var start_offset = parser.input_src.range.start
+  parser.input_src.with_range(
+    {start_offset + cursor_range.start}..{start_offset + cursor_range.end}
+  )
+}
+fun src_from_until_cursor(parser: Parser, start: Int): Src {
+  parser.src_of(start..parser.cursor)
 }
 fun src_of_rest(parser: Parser): Src {
   parser.input_src.with_range(
@@ -202,7 +223,7 @@ fun parse_string(parser: &Parser): Result[Maybe[String], Error] {
   parsed(parser.input.substr(start..end))
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/<>"
-fun parse_identifier(parser: &Parser): Maybe[String] {
+fun parse_identifier(parser: &Parser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   var start = parser.cursor
   loop {
@@ -210,22 +231,22 @@ fun parse_identifier(parser: &Parser): Maybe[String] {
     parser.advance()
   }
   var end = parser.cursor
-  if start == end then return none[String]()
+  if start == end then return none[StringAndSrc]()
   var identifier = parser.input.substr(start..end)
   if identifier == "->" then {
     parser.cursor = start
-    return none[String]()
+    return none[StringAndSrc]()
   }
-  some(identifier)
+  some(identifier @ parser.src_of(start..end))
 }
-fun parse_name(parser: &Parser): Maybe[String] {
+fun parse_name(parser: &Parser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
-  not(parser.current().is_upper()) or return none[String]()
+  not(parser.current().is_upper()) or return none[StringAndSrc]()
   parser.parse_identifier()
 }
-fun parse_symbol(parser: &Parser): Maybe[String] {
+fun parse_symbol(parser: &Parser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
-  parser.current().is_upper() or return none[String]()
+  parser.current().is_upper() or return none[StringAndSrc]()
   parser.parse_identifier()
 }
 | Parses an expression that doesn't include whitespace (except in parentheses).
@@ -242,10 +263,16 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
       ))
     return parsed(expr)
   }
-  if parser.parse_int() is some(int) then return parsed(ToastExpr.int(int))
-  if parser.parse_string()? is some(str) then return parsed(ToastExpr.string(str))
-  if parser.parse_name() is some(name) then return parsed(ToastExpr.name(name))
-  if parser.parse_symbol() is some(symbol) then return parsed(ToastExpr.symbol(symbol))
+
+  var start = parser.cursor
+  if parser.parse_int() is some(int) then
+    return parsed(ToastExprKind.int(int) @ parser.src_from_until_cursor(start))
+  if parser.parse_string()? is some(str) then
+    return parsed(ToastExprKind.string(str) @ parser.src_from_until_cursor(start))
+  if parser.parse_name() is some(name) then
+    return parsed(ToastExprKind.name(name.string) @ name.src)
+  if parser.parse_symbol() is some(symbol) then
+    return parsed(ToastExprKind.symbol(symbol.string) @ symbol.src)
   no_match[ToastExpr]()
 }
 | Parses an expression that doesn't contain pipes (except in parentheses).
@@ -255,9 +282,9 @@ fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   var args = list[ToastExpr]()
   loop args.&.push(parser.parse_atom()? or break)
   if args.is_not_empty() then
-    expr = ToastExpr.call(ToastCall {
+    expr = ToastExprKind.call(ToastCall {
       receiver = expr.put_on_heap(), args = args.to_slice()
-    })
+    }) @ {expr.src ... args.last().src}
 
   parsed(expr)
 }
@@ -275,7 +302,8 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   if parser.consume(#=) is some(equals_src) then {
     var cursor_after_equals_sign = parser.cursor
     if parser.parse_expr()? is some(value) then
-      expr = ToastExpr.var_(create_var(expr, value, equals_src)?)
+      expr = ToastExprKind.var_(create_var(expr, value, equals_src)?)
+        @ {expr.src ... value.src}
     else
       parser.cursor = cursor_after_equals_sign - 1
   }
@@ -315,7 +343,7 @@ fun parse_type_expr(parser: &Parser): Result[Maybe[ToastType], Error] {
 fun create_var(
   left: ToastExpr, right: ToastExpr, equals_src: Src
 ): Result[ToastVar, Error] {
-  switch left
+  switch left.kind
   case name(name)
     ok[ToastVar, Error](ToastVar { name, value = right.put_on_heap() })
   default
@@ -326,7 +354,7 @@ fun create_var(
 
 fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
   if bacon.line == "|" then {
-    var variants = map[String, Slice[ToastType]]()
+    var variants = list[ToastTypeCase]()
     for variant in bacon.children do {
       var parser = parser(variant.line, variant.src)
       var name = parser.&.parse_symbol() or
@@ -349,7 +377,7 @@ fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
             ))
           variant.children.to_toast_types()?
         }
-      variants.&.put(name, args)
+      variants.&.push(ToastTypeCase { name, args })
     }
     ok[ToastType, Error](ToastType.enum_(variants))
   } else {
@@ -386,7 +414,7 @@ fun to_toast_types(bacons: Slice[Bacon]): Result[Slice[ToastType], Error] {
 fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
   var parser = parser(bacon.line, bacon.src)
   var name = parser.&.parse_symbol() or return no_match[ToastTypeDef]()
-  var params = list[String]()
+  var params = list[StringAndSrc]()
   loop params.&.push(parser.&.parse_name() or break)
   parser.&.consume(#=) or
     return bad_input[ToastTypeDef](error(
@@ -411,10 +439,7 @@ fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
       bacon.children.len == 1 or
         return bad_input[ToastTypeDef](error(
           "Type definition, but it has {bacon.children.len} children.",
-          bacon.src.with_range(
-            bacon.children.first().src.range.start
-              ..bacon.children.last().src.range.end
-          ),
+          bacon.children.first().src ... bacon.children.last().src,
         ))
       bacon.children.get(0).to_toast_type()?
     }
@@ -429,14 +454,18 @@ fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
       "Expected expression", parser.src_of_rest()
     ))
   var children = bacon.children.to_toast_exprs()?
-  if parser.&.consume(#=) is some(equals_src) then
-    expr = ToastExpr.var_(
-      create_var(expr, ToastExpr.body(children), equals_src)?
-    )
-  else if children.is_not_empty() then
-    expr = ToastExpr.call(ToastCall {
+  if parser.&.consume(#=) is some(equals_src) then {
+    if children.is_empty() then return bad_input[ToastExpr](error(
+      "Expected a body.", equals_src
+    ))
+    var body_src = children.first().src ... children.last().src
+    expr = ToastExprKind.var_(
+      create_var(expr, ToastExprKind.body(children) @ body_src, equals_src)?
+    ) @ {expr.src ... children.last().src}
+  } else if children.is_not_empty() then
+    expr = ToastExprKind.call(ToastCall {
       receiver = expr.put_on_heap(), args = children
-    })
+    }) @ {expr.src ... children.last().src}
   parser.&.is_done() or
     return bad_input[ToastExpr](error(
       "Additional garbage on line.", parser.src_of_rest()
@@ -454,15 +483,21 @@ fun parse_switch(
       return bad_input[ToastExpr](error(
         "Expected the symbol of a case.", parser.src_of_rest()
       ))
-    var params = list[String]()
+    var params = list[StringAndSrc]()
     loop params.&.push(parser.&.parse_name() or break)
-    parser.&.consume(#:) or
+    var colon_src = parser.&.consume(#:) or
       return bad_input[ToastExpr](error(
         "Expected a colon.", parser.src_of_rest()
       ))
     var body =
       if parser.cursor == parser.input.len then {
-        ToastExpr.body(case_.children.to_toast_exprs()?)
+        var children = case_.children.to_toast_exprs()?
+        if children.is_empty() then
+          return bad_input[ToastExpr](error(
+          "Expected the body of the case.", colon_src,
+        ))
+        var body_src = {children.first().src ... children.last().src}
+        ToastExprKind.body(children) @ body_src
       } else {
         var expr = parser.&.parse_expr()? or
           return bad_input[ToastExpr](error(
@@ -480,9 +515,9 @@ fun parse_switch(
       }
     cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
   }
-  parsed(ToastExpr.switch_(ToastSwitch {
+  parsed(ToastExprKind.switch_(ToastSwitch {
     condition = condition.put_on_heap(), cases = cases.to_slice()
-  }))
+  }) @ {bacon.src ... if cases.is_empty() then bacon.src else cases.last().body.src})
 }
 fun parse_pipe(
   bacon: Bacon, previous: ToastExpr
@@ -498,16 +533,16 @@ fun parse_pipe(
   parsed(piped_call(previous, piped_into))
 }
 fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
-  if piped_into is call(call) then {
+  if piped_into.kind is call(call) then {
     var args = list(left)
     for arg in call.args do args.&.push(arg)
-    ToastExpr.call(ToastCall {
+    ToastExprKind.call(ToastCall {
       receiver = call.receiver, args = args.to_slice()
-    })
+    }) @ {left.src ... piped_into.src}
   } else
-    ToastExpr.call(ToastCall {
+    ToastExprKind.call(ToastCall {
       receiver = piped_into.put_on_heap(), args = list(left).to_slice()
-    })
+    }) @ {left.src ... piped_into.src}
 }
 fun to_toast_exprs(bacons: Slice[Bacon]): Result[Slice[ToastExpr], Error] {
   var exprs = list[ToastExpr]()
@@ -537,11 +572,11 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
     var name = parser.&.parse_name() or break
     parser.&.consume(#:) or
       return bad_input[ToastFun](error(
-        "Expected : after param {name}.", parser.src_of_rest()
+        "Expected : after param {name.string}.", name.src
       ))
     var type = parser.&.parse_type_atom()? or
       return bad_input[ToastFun](error(
-        "Expected type of param {name}", parser.src_of_rest()
+        "Expected type of param {name.string}", name.src
       ))
     params.&.push(ToastParam { name, type })
   }
@@ -554,7 +589,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
       "expected return type",
       parser.src_of_rest()
     ))
-  parser.&.consume(#=) or
+  var equals_src = parser.&.consume(#=) or
     return bad_input[ToastFun](error(
       "expected =", parser.src_of_rest()
     ))
@@ -570,8 +605,13 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
           "Additional garbage on line.", parser.src_of_rest()
         ))
       body
-    } else
-      ToastExpr.body(bacon.children.to_toast_exprs()?)
+    } else {
+      var children = bacon.children.to_toast_exprs()?
+      if children.is_empty() then
+        return bad_input[ToastFun](error("Expected function body.", equals_src))
+      var body_src = children.first().src ... children.last().src
+      ToastExprKind.body(children) @ body_src
+    }
 
   parsed(ToastFun { name, params = params.to_slice(), return_type, body })
 }

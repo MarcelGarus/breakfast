@@ -33,10 +33,16 @@ fun main(): Never {
   }
   | println("Toast:\n{toast}\n")
 
-  var egg = toast.to_egg()
+  var egg = toast.to_egg() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
   | println("Egg:\n{egg}\n")
 
-  var yogurt = egg.to_yogurt()
+  var yogurt = egg.to_yogurt() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
   eprintln("Yogurt:\n{yogurt}\n")
 
   var c = yogurt.to_c()
