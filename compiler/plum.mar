@@ -1,19 +1,20 @@
 import ../../martinaise/stdlib.mar
 import error.mar
+import type.mar
 import builtins.mar
 import bacon.mar
 import toast.mar
 import egg.mar
 import yogurt.mar
-import c.mar
-import type.mar
+import to_byte_code.mar
+import vm.mar
 
 | Compiler Stages:
 | - Bacon
 | - Toast
 | - Egg
 | - Yogurt
-| - C
+| - Byte Code
 
 fun main(): Never {
   eprintln("Welcome to the Plum compiler!")
@@ -45,9 +46,20 @@ fun main(): Never {
   }
   eprintln("Yogurt:\n{yogurt}\n")
 
-  var c = yogurt.to_c()
-  write_file("test.c", c.code.bytes())
-  eprintln("\nWrote C code to test.c")
+  | var c = yogurt.to_c()
+  | write_file("test.c", c.code.bytes())
+  | eprintln("\nWrote C code to test.c")
+
+  eprintln("Compiling to byte code")
+  var universe = big_bang()
+  var main = yogurt.compile(universe.&)
+  | eprintln("Compiled to byte code:\n{universe}")
+
+  eprintln("Running")
+  var five = universe.&.new(Object.int(5))
+  var return_value = universe.&.call(main, list(five).to_slice())
+  stdout.write_deep(return_value, universe)
+  println()
 
   exit(0)
 }

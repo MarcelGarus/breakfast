@@ -1,0 +1,275 @@
+| The VM, universe, and byte code  
+| All Plum objects (including source code) are owned by a universe. First, you
+| create a universe using the big_bang function. Only then can you compile code
+| into that universe. You can then call the compiled functions.
+|
+| Internally, calling code runs a stack-based virtual machine (VM), something
+| like a mini-computer implemented in software. The VM has its own data and call
+| stack and operates on instructions (called byte code). To see how Yogurt gets
+| converted into instructions for this  byte code, check out to_byte_code.mar.
+
+import plum.mar
+
+struct Universe { objects: List[Object] }
+
+struct ObjectId { int: Int } | index in the objects list
+enum Object {
+  int: Int,
+  string: String,
+  tag: TagObject,
+  code: CodeObject, | code from one compilation unit
+}
+struct TagObject { symbol: String, args: Slice[ObjectId] }
+struct CodeObject { funs: List[FunCode] }
+struct FunId { int: Int } | index in a code's functions list
+struct FunCode { name: String, instructions: Slice[ByteCodeInstruction] }
+enum ByteCodeInstruction {
+  push_object: ObjectId,
+  push_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
+  pop_n_below_top: Int, | pops n objects, skipping the top object
+  jump: Int, | jumps to the given instruction index inside this function
+  jump_table: Map[String, Int], | peeks at the top value (a tag). depending on the symbol, jumps to different instruction indices
+  tag: Tuple2[String, Int], | symbol and number of arguments
+  untag, | consumes a tag, pushes all its args on the stack
+  call: FunId, | calls another function from the same compilation unit
+  add_ints,
+  sub_ints,
+  mul_ints,
+  div_ints,
+  mod_ints,
+  and_ints,
+  or_ints,
+  xor_ints,
+  compare_ints,
+  concat_strings,
+  crash,
+}
+
+fun big_bang(): Universe { Universe { objects = list[Object]() } }
+
+fun new(universe: &Universe, object: Object): ObjectId {
+  var id = universe.objects.len
+  universe.objects.&.push(object)
+  ObjectId { int = id }
+}
+fun get(universe: Universe, id: ObjectId): Object {
+  universe.objects.get(id.int)
+}
+fun get(code: CodeObject, id: FunId): FunCode { code.funs.get(id.int) }
+
+fun write[W](writer: W, universe: Universe) {
+  writer."Universe:"
+  for object in universe.objects.iter().enumerate() do {
+    writer."\n{ObjectId { int = object.index }}: "
+    writer.write(object.item)
+  }
+}
+fun write[W](writer: W, id: ObjectId) { writer."#{id.int}" }
+fun write[W](writer: W, object: Object) {
+  switch object
+  case int(int) writer."{int}"
+  case string(string) writer."{string.debug()}"
+  case tag(tag) {
+    writer."({tag.symbol}"
+    for arg in tag.args do writer." {arg}"
+    writer.")"
+  }
+  case code(code) writer."{code}"
+}
+fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
+  switch universe.get(id)
+  case int(int) writer."{int}"
+  case string(string) writer."{string.debug()}"
+  case tag(tag) {
+    writer."({tag.symbol}"
+    for arg in tag.args do {
+      writer." "
+      writer.write_deep(arg, universe)
+    }
+    writer.")"
+  }
+  case code(code) writer."{code}"
+}
+fun write[W](writer: W, code: CodeObject) {
+  for fun_ in code.funs.iter().enumerate() do {
+    writer."\n  {FunId { int = fun_.index }} ({fun_.item.name}):"
+    for instruction in fun_.item.instructions.iter().enumerate() do {
+      writer."\n    {"{instruction.index}".pad_left(3)} | {instruction.item}"
+    }
+  }
+}
+fun write[W](writer: W, id: FunId) { writer."fun-{id.int}" }
+fun write[W](writer: W, instruction: ByteCodeInstruction) {
+  switch instruction
+  case push_object(id) writer."push {id}"
+  case push_from_stack(n) writer."push top - {n}"
+  case pop_n_below_top(n) writer."pop {n} below top"
+  case jump(index) writer."jump to {index}"
+  case jump_table(table) {
+    writer."jump to:"
+    for entry in table do writer."\n        |   {entry.key} -> {entry.value}"
+  }
+  case tag(tag) writer."tag {tag.a} with {tag.b} args"
+  case untag writer."untag"
+  case call(function) writer."call {function}"
+  case add_ints writer."add_ints"
+  case sub_ints writer."sub_ints"
+  case mul_ints writer."mul_ints"
+  case div_ints writer."div_ints"
+  case mod_ints writer."mod_ints"
+  case and_ints writer."and_ints"
+  case or_ints writer."or_ints"
+  case xor_ints writer."xor_ints"
+  case compare_ints writer."compare_ints"
+  case concat_strings writer."concat_strings"
+  case crash writer."crash"
+}
+
+struct Vm {
+  universe: &Universe,
+  data_stack: List[ObjectId],
+  call_stack: List[CallStackEntry],
+}
+struct CallStackEntry {
+  code: ObjectId, fun_: FunId, instruction_index: Int
+}
+
+fun write[W](writer: W, vm: Vm) {
+  writer."data stack:"
+  for id in vm.data_stack do {
+    writer." "
+    writer.write_deep(id, vm.universe.*)
+  }
+  writer."\ncall stack:"
+  for call in vm.call_stack do
+    writer."\n- {vm.get(call.code).code.unwrap().get(call.fun_).name.debug()}:{call.instruction_index}"
+  | writer."\ninstructions:"
+  | for instruction in vm.instructions.iter().enumerate() do {
+  |   var is_current = instruction.index == vm.instruction_pointer
+  |   writer."\n{if is_current then ">" else " "} "
+  |   writer.write(instruction.item, vm)
+  | }
+}
+
+fun new(vm: &Vm, object: Object): ObjectId { vm.universe.new(object) }
+fun get(vm: Vm, id: ObjectId): Object { vm.universe.get(id) }
+fun push(vm: &Vm, id: ObjectId) { vm.data_stack.&.push(id) }
+fun pop(vm: &Vm): ObjectId { vm.data_stack.&.pop() }
+fun call(universe: &Universe, fun_: MainFun, args: Slice[ObjectId]): ObjectId {
+  var vm = Vm {
+    universe,
+    data_stack = list[ObjectId](),
+    call_stack = list[CallStackEntry](),
+  }
+
+  for arg in args do vm.&.push(arg)
+  vm.call_stack.&.push(CallStackEntry {
+    code = fun_.code, fun_ = fun_.id, instruction_index = 0
+  })
+  loop {
+    var current_call = vm.call_stack.get_maybe_ref(vm.call_stack.len - 1) or {
+      break
+    }
+    var instructions = vm.get(current_call.code).code.unwrap()
+      .get(current_call.fun_).instructions
+    var instruction = instructions.get_maybe(current_call.instruction_index) or {
+      vm.call_stack.&.pop()
+      continue
+    }
+    current_call.instruction_index = current_call.instruction_index + 1
+
+    | println("running {instruction.debug()}")
+    switch instruction
+    case push_object(object_id) vm.&.push(object_id)
+    case push_from_stack(offset) vm.&.push(vm.data_stack.get(vm.data_stack.len - 1 - offset))
+    case pop_n_below_top(n) {
+      var top = vm.&.pop()
+      for i in 0..n do vm.&.pop()
+      vm.&.push(top)
+    }
+    case jump(index) current_call.instruction_index = index
+    case jump_table(table) {
+      var symbol = vm.get(vm.data_stack.last()).tag.unwrap().symbol
+      current_call.instruction_index = table.get(symbol)
+    }
+    case tag(tag) {
+      var symbol = tag.a
+      var num_args = tag.b
+      var args = uninitialized_slice[ObjectId](num_args)
+      for i in 0..num_args do args.get_ref(num_args - 1 - i).* = vm.&.pop()
+      vm.&.push(vm.&.new(Object.tag(TagObject{ symbol, args })))
+    }
+    case untag {
+      var tag = vm.get(vm.&.pop()).tag.unwrap()
+      for arg in tag.args do vm.&.push(arg)
+    }
+    case call(fun_)
+      vm.call_stack.&.push(CallStackEntry {
+        code = current_call.code, fun_, instruction_index = 0
+      })
+    case add_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a + b)))
+    }
+    case sub_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a - b)))
+    }
+    case mul_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a * b)))
+    }
+    case div_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a / b)))
+    }
+    case mod_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a % b)))
+    }
+    case and_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a & b)))
+    }
+    case or_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(or(a, b))))
+    }
+    case xor_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.int(a ^ b)))
+    }
+    case compare_ints {
+      var b = vm.get(vm.&.pop()).int.unwrap()
+      var a = vm.get(vm.&.pop()).int.unwrap()
+      vm.&.push(vm.&.new(Object.tag(TagObject {
+        symbol =
+          switch a <=> b
+          case less "Less"
+          case equal "Equal"
+          case greater "Greater",
+        args = empty_slice[ObjectId]()
+      })))
+    }
+    case concat_strings {
+      var b = vm.get(vm.&.pop()).string.unwrap()
+      var a = vm.get(vm.&.pop()).string.unwrap()
+      vm.&.push(vm.&.new(Object.string("{a}{b}")))
+    }
+    case crash {
+      var msg = vm.get(vm.&.pop()).string.unwrap()
+      panic("VM crashed: {msg}")
+    }
+  }
+
+  vm.data_stack.len == 1 or panic("more than one return value on the data stack")
+  vm.data_stack.get(0)
+}

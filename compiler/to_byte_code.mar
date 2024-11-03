@@ -1,0 +1,157 @@
+import plum.mar
+
+struct MainFun { code: ObjectId, id: FunId }
+
+fun compile(yogurt: Yogurt, universe: &Universe): MainFun {
+  var signature_to_id = map[YogurtSignature, FunId]()
+  for fun_ in yogurt.funs.iter().enumerate() do
+    signature_to_id.&.put(fun_.item.key, FunId { int = fun_.index }) | placeholders
+
+  var funs = uninitialized_list[FunCode](yogurt.funs.size)
+  for fun_ in yogurt.funs do {
+    var signature = fun_.key
+    var fun_ = fun_.value
+    var id = signature_to_id.get(signature)
+    funs.&.get_ref(id.int).* = fun_.compile(signature, universe, signature_to_id)
+  }
+
+  var code = universe.new(Object.code(CodeObject { funs }))
+
+  MainFun {
+    code,
+    id = signature_to_id.get(yogurt_signature(
+      "main",
+      list(YogurtParam.runtime(PlumType.primitive("Int"))).to_slice()
+    ))
+  }
+}
+fun compile(
+  fun_: YogurtFun, signature: YogurtSignature,
+  universe: &Universe, signature_to_id: Map[YogurtSignature, FunId]
+): FunCode {
+  var stack_model = list[YogurtId]()
+  for param in fun_.body.params do stack_model.&.push(param)
+  var instructions = list[ByteCodeInstruction]()
+
+  fun_.body.compile(
+    instructions.&, stack_model.&, fun_, universe, signature_to_id
+  )
+
+  FunCode { name = signature.str, instructions = instructions.to_slice() }
+}
+fun compile(
+  body: YogurtBody,
+  instructions: &List[ByteCodeInstruction],
+  stack_model: &List[YogurtId],
+  fun_: YogurtFun,
+  universe: &Universe,
+  signature_to_id: Map[YogurtSignature, FunId],
+) {
+  for id in body.exprs do {
+    var expr = fun_.get(id)
+    switch expr.op
+    case param panic("param should not exist in body")
+    case uninitialized {}
+    case comptime(value)
+      instructions.push(ByteCodeInstruction.push_object(value.to_object(universe)))
+    case switch_(switch_) {
+      instructions.push(ByteCodeInstruction.push_from_stack(
+        stack_model.find_distance_from_top(switch_.condition)
+      ))
+      var variants = fun_.get(switch_.condition).type.enum_.unwrap()
+
+      var jump_table_index = instructions.len
+      instructions.push(ByteCodeInstruction.jump_table(map[String, Int]()))  | placeholder
+
+      var table = map[String, Int]()
+      var end_jumps = list[Int]()
+      for case_ in switch_.cases do {
+        table.&.put(case_.key, instructions.len)
+
+        var stack_len_before = stack_model.len
+        instructions.push(ByteCodeInstruction.untag)
+        for param in case_.value.params do stack_model.push(param)
+        case_.value.compile(instructions, stack_model, fun_, universe, signature_to_id)
+        stack_model.pop().ignore()
+        var stack_len_after = stack_model.len
+        stack_len_before == stack_len_after or panic("stack len mismatch ({stack_len_before} and {stack_len_after})")
+
+        end_jumps.&.push(instructions.len)
+        instructions.push(ByteCodeInstruction.jump(0))  | placeholder
+      }
+      var end = instructions.len
+      for jump in end_jumps do
+        instructions.get_ref(jump).* = ByteCodeInstruction.jump(end)
+      instructions.get_ref(jump_table_index).* = ByteCodeInstruction.jump_table(table)
+    }
+    case tag(tag) {
+      for arg in tag.args do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(arg)
+        ))
+        stack_model.push(arg)
+      }
+      instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
+      stack_model.pop(tag.args.len)
+    }
+    case call(call) {
+      for arg in call.args do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(arg)
+        ))
+        stack_model.push(arg)
+      }
+      var fun_ = signature_to_id.get(call.receiver)
+      instructions.push(ByteCodeInstruction.call(fun_))
+      stack_model.pop(call.args.len)
+    }
+    case instruction(instruction) {
+      for arg in instruction.args do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(arg)
+        ))
+        stack_model.push(arg)
+      }
+
+      switch instruction.instruction
+      case add_ints instructions.push(ByteCodeInstruction.add_ints)
+      case sub_ints instructions.push(ByteCodeInstruction.sub_ints)
+      case mul_ints instructions.push(ByteCodeInstruction.mul_ints)
+      case div_ints instructions.push(ByteCodeInstruction.div_ints)
+      case mod_ints instructions.push(ByteCodeInstruction.mod_ints)
+      case and_ints instructions.push(ByteCodeInstruction.and_ints)
+      case or_ints instructions.push(ByteCodeInstruction.or_ints)
+      case xor_ints instructions.push(ByteCodeInstruction.xor_ints)
+      case compare_ints instructions.push(ByteCodeInstruction.compare_ints)
+      case concat_strings instructions.push(ByteCodeInstruction.concat_strings)
+      case crash instructions.push(ByteCodeInstruction.crash)
+
+      stack_model.pop(instruction.args.len)
+    }
+    stack_model.&.push(id)
+  }
+  instructions.push(ByteCodeInstruction.push_from_stack(
+    stack_model.find_distance_from_top(body.returns)
+  ))
+  instructions.push(ByteCodeInstruction.pop_n_below_top(
+    body.params.len + body.exprs.len
+  ))
+  stack_model.pop(body.params.len + body.exprs.len)
+  stack_model.push(body.returns)
+}
+fun find_distance_from_top(stack_model: List[YogurtId], id: YogurtId): Int {
+  for entry in stack_model.to_slice().rev_iter().enumerate() do
+    if entry.item == id then return entry.index
+  panic("{id} not on stack {stack_model}")
+}
+fun to_object(value: YogurtValue, universe: &Universe): ObjectId {
+  switch value.kind
+  case int(int) universe.new(Object.int(int))
+  case string(string) universe.new(Object.string(string))
+  case type(type) universe.new(Object.string("{type}"))
+  case tag(tag) {
+    var args = list[ObjectId]()
+    for arg in tag.b do args.&.push(arg.to_object(universe))
+    universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
+  }
+}
