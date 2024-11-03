@@ -347,12 +347,12 @@ fun to_yogurt(
   expr: EggExpr, builder: &YogurtFunBuilder, compiler: &YogurtCodeCompiler,
   body: &List[YogurtId],
 ): Result[YogurtId, Error] {
-  var expr =
+  var id =
     switch expr.kind
     case param unreachable()
-    case int(int) yogurt_value_int(int).to_expr()
-    case string(string) yogurt_value_string(string).to_expr()
-    case symbol(symbol) yogurt_value_symbol(symbol).to_expr()
+    case int(int) builder.push(yogurt_value_int(int).to_expr())
+    case string(string) builder.push(yogurt_value_string(string).to_expr())
+    case symbol(symbol) builder.push(yogurt_value_symbol(symbol).to_expr())
     case struct_(struct_) {
       var fields = map[String, YogurtId]()
       var field_types = map[String, PlumType]()
@@ -362,8 +362,7 @@ fun to_yogurt(
         fields.&.put(field.key, field_id)
         field_types.&.put(field.key, type)
       }
-
-      YogurtOp.struct_(fields) $ PlumType.struct_(field_types)
+      builder.push(YogurtOp.struct_(fields) $ PlumType.struct_(field_types))
     }
     case member(member) {
       var of = compiler.lookup(member.of)
@@ -378,7 +377,9 @@ fun to_yogurt(
           "{member.name} doesn't exist: {of_fields}", expr.src
         ))
 
-      YogurtOp.member(YogurtMember { of, name = member.name }) $ field_type
+      builder.push(
+        YogurtOp.member(YogurtMember { of, name = member.name }) $ field_type
+      )
     }
     case switch_(switch_) {
       var condition = compiler.lookup(switch_.condition)
@@ -413,68 +414,67 @@ fun to_yogurt(
           ))
       }
 
-      if false then { | condition_expr.op is comptime(value)
-        unreachable()
-        | Only compile the corresponding branch.
-        | var tag = value.kind.tag.unwrap()
-        | var case_ = switch_.cases.get(tag.a)
-        | if tag.b.len > 0 then todo("handle comptime switch with variant args")
-        | for egg_id in case_.exprs do {
-        |   var expr = compiler.code.get(egg_id).to_yogurt(builder, compiler)
-        |   var yogurt_id = builder.push(expr)
-        |   exprs.&.push(yogurt_id)
-        |   compiler.add_mapping(egg_id, yogurt_id)
-        | }
+      | Lower all cases.
+      var cases = map[String, YogurtBody]()
+      var case_types = list[PlumType]()
+      for variant in condition_variants do {
+        var case_ = switch_.cases.get(variant.key)
+        var params = list[YogurtParam]()
+        for arg in variant.value do params.&.push(YogurtParam.runtime(arg))
+        var body = case_.to_yogurt(params.to_slice(), builder, compiler)?
+        cases.&.put(variant.key, body)
+        case_types.&.push(builder.get(body.returns).type)
+      }
+
+      | Find the common type of all branches.
+      var common_type = join(case_types.to_slice())
+        or return error[YogurtId, Error](error("Couldn't join types {case_types}", expr.src))
+
+      | Add cast expressions where necessary.
+      for case_ in cases do {
+        var case_expr = builder.get(case_.value.returns)
+        var case_type = case_expr.type
+        if case_type != common_type then {
+          var old_body = case_.value
+          var new_exprs = list[YogurtId]()
+          for expr in old_body.exprs do new_exprs.&.push(expr)
+          var new_returns =
+            | TODO: What if we cast (| Foo (| True False)) to
+            | (| Foo (| True False Bar))?
+            if case_expr.op is comptime(value)
+            then builder.push(YogurtValue {
+              type = common_type, kind = value.kind
+            }.to_expr())
+            else {
+              var cast_fun =
+                compiler.yogurt.compile_cast_fun(case_type, common_type)
+              builder.push(YogurtOp.call(YogurtCall {
+                receiver = cast_fun, args = list(old_body.returns).to_slice()
+              }) $ common_type)
+            }
+          new_exprs.&.push(new_returns)
+          cases.&.put(case_.key, YogurtBody {
+            params = old_body.params,
+            exprs = new_exprs.to_slice(),
+            returns = new_returns,
+          })
+        }
+      }
+
+      if condition_expr.op is comptime(value) then {
+        var value = value.kind.tag.unwrap()
+        var variant = value.a
+        var case_body = cases.get(variant)
+        for both in zip(case_body.params.iter(), value.b.iter()) do {
+          builder.exprs.&.get_ref(both.a.int).op = YogurtOp.comptime(both.b)
+          body.push(both.a)
+        }
+        for id in case_body.exprs do body.push(id)
+        case_body.returns
       } else {
-        | Lower all cases.
-        var cases = map[String, YogurtBody]()
-        var case_types = list[PlumType]()
-        for variant in condition_variants do {
-          var case_ = switch_.cases.get(variant.key)
-          var params = list[YogurtParam]()
-          for arg in variant.value do params.&.push(YogurtParam.runtime(arg))
-          var body = case_.to_yogurt(params.to_slice(), builder, compiler)?
-          cases.&.put(variant.key, body)
-          case_types.&.push(builder.get(body.returns).type)
-        }
-
-        | Find the common type of all branches.
-        var common_type = join(case_types.to_slice())
-          or return error[YogurtId, Error](error("Couldn't join types {case_types}", expr.src))
-
-        | Add cast expressions where necessary.
-        for case_ in cases do {
-          var case_expr = builder.get(case_.value.returns)
-          var case_type = case_expr.type
-          if case_type != common_type then {
-            eprintln("Insert cast from {case_type} to {common_type}")
-            var old_body = case_.value
-            var new_exprs = list[YogurtId]()
-            for expr in old_body.exprs do new_exprs.&.push(expr)
-            var new_returns =
-              | TODO: What if we cast (| Foo (| True False)) to
-              | (| Foo (| True False Bar))?
-              if case_expr.op is comptime(value)
-              then builder.push(YogurtValue {
-                type = common_type, kind = value.kind
-              }.to_expr())
-              else {
-                var cast_fun =
-                  compiler.yogurt.compile_cast_fun(case_type, common_type)
-                builder.push(YogurtOp.call(YogurtCall {
-                  receiver = cast_fun, args = list(old_body.returns).to_slice()
-                }) $ common_type)
-              }
-            new_exprs.&.push(new_returns)
-            cases.&.put(case_.key, YogurtBody {
-              params = old_body.params,
-              exprs = new_exprs.to_slice(),
-              returns = new_returns,
-            })
-          }
-        }
-
-        YogurtOp.switch_(YogurtSwitch { condition, cases }) $ common_type
+        builder.push(
+          YogurtOp.switch_(YogurtSwitch { condition, cases }) $ common_type
+        )
       }
     }
     case call(call) {
@@ -506,7 +506,9 @@ fun to_yogurt(
       var are_all_args_comptime = true
       for arg in arg_params do
         if arg is runtime then are_all_args_comptime = false
-      if are_all_args_comptime then {
+      var comptime_result = are_all_args_comptime or name.string == "builtin_type_of"
+
+      if comptime_result then {
         body.push(builder.push(YogurtOp.call(YogurtCall {
           receiver = yogurt_signature(name.string, arg_params), args
         }) $ return_type))
@@ -518,12 +520,14 @@ fun to_yogurt(
           ))
         }
         var returned_expr = compiled_fun.get(compiled_fun.body.returns)
-        var value = returned_expr.op.comptime.unwrap()
-        YogurtOp.comptime(value) $ return_type
+        var value = returned_expr.op.comptime.unwrap("value should be comptime known,but it's {returned_expr.op.debug()}")
+        builder.push(YogurtOp.comptime(value) $ return_type)
       } else {
-        YogurtOp.call(YogurtCall {
-          receiver = yogurt_signature(name.string, arg_params), args
-        }) $ return_type
+        builder.push(
+          YogurtOp.call(YogurtCall {
+            receiver = yogurt_signature(name.string, arg_params), args
+          }) $ return_type
+        )
       }
     }
     case tag(tag) {
@@ -540,10 +544,11 @@ fun to_yogurt(
       var args = args.to_slice()
       var arg_types = arg_types.to_slice()
 
-      YogurtOp.tag(YogurtTag { symbol, args })
-        $ PlumType.enum_(map(symbol -> arg_types))
+      builder.push(
+        YogurtOp.tag(YogurtTag { symbol, args })
+          $ PlumType.enum_(map(symbol -> arg_types))
+      )
     }
-  var id = builder.push(expr)
   body.push(id)
   ok[YogurtId, Error](id)
 }

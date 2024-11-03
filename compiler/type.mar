@@ -28,9 +28,9 @@ var type_ordering = PlumType.enum_(map(
 var type_type_info = PlumType.enum_(map(
   "Int"    -> empty_slice[PlumType](),
   "String" -> empty_slice[PlumType](),
-  "Type"   -> empty_slice[PlumType](),
   "Struct"   -> empty_slice[PlumType](),
   "Enum"   -> empty_slice[PlumType](),
+  "Type"   -> empty_slice[PlumType](),
 ))
 
 fun ==(a: PlumType, b: PlumType): Bool {
