@@ -1,12 +1,7 @@
-| The VM, universe, and byte code  
+| The Universe and Byte Code  
 | All Plum objects (including source code) are owned by a universe. First, you
-| create a universe using the big_bang function. Only then can you compile code
-| into that universe. You can then call the compiled functions.
-|
-| Internally, calling code runs a stack-based virtual machine (VM), something
-| like a mini-computer implemented in software. The VM has its own data and call
-| stack and operates on instructions (called byte code). To see how Yogurt gets
-| converted into instructions for this  byte code, check out to_byte_code.mar.
+| create an empty universe using the big_bang function. Only then can you
+| compile code into that universe. You can then call the compiled functions.
 
 import plum.mar
 

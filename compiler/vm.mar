@@ -1,3 +1,8 @@
+| The Virtual Machine  
+| Internally, code runs in a stack-based virtual machine (VM), something like a
+| mini-computer implemented in software. The VM has its own data stack and call
+| stack and operates on instructions (called byte code instructions).
+
 import plum.mar
 
 struct Vm {
