@@ -28,10 +28,24 @@ var type_ordering = PlumType.enum_(map(
 var type_type_info = PlumType.enum_(map(
   "Int"    -> empty_slice[PlumType](),
   "String" -> empty_slice[PlumType](),
-  "Struct"   -> empty_slice[PlumType](),
-  "Enum"   -> empty_slice[PlumType](),
+  "Struct" -> list(type_list(type_field)).to_slice(),
+  "Enum"   -> list(type_list(type_variant)).to_slice(),
   "Type"   -> empty_slice[PlumType](),
 ))
+var type_field = PlumType.struct_(map(
+  "name" -> type_string,
+  "type" -> type_type,
+))
+var type_variant = PlumType.struct_(map(
+  "name" -> type_string,
+  "args" -> type_list(type_type),
+))
+fun type_list(item: PlumType): PlumType {
+  PlumType.enum_(map(
+    "Empty" -> empty_slice[PlumType](),
+    "More"  -> list(item, PlumType.recursive(1)).to_slice(),
+  ))
+}
 
 fun ==(a: PlumType, b: PlumType): Bool {
   switch a
@@ -187,6 +201,7 @@ fun match_against_logic(
       var concrete_type = field.value
       var generic_type = generic_fields.get_maybe(field.key) or return false
       concrete_type.match_against(generic_type, constraints, currently_matching)
+        or return false
     }
     for field in generic_fields do
       concrete_fields.contains(field.key) or return false
@@ -198,6 +213,7 @@ fun match_against_logic(
       var concrete_args = variant.value
       var generic_args = generic_variants.get_maybe(variant.key) or return false
       concrete_args.match_against(generic_args, constraints, currently_matching)
+        or return false
     }
     true
   }

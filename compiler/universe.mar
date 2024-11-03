@@ -308,10 +308,16 @@ fun to_object(value: YogurtValue, universe: &Universe): ObjectId {
   switch value.kind
   case int(int) universe.new(Object.int(int))
   case string(string) universe.new(Object.string(string))
-  case type(type) universe.new(Object.string("{type}"))
+  case struct_(struct_) {
+    var fields = map[String, ObjectId]()
+    for field in struct_ do
+      fields.&.put(field.key, field.value.to_object(universe))
+    universe.new(Object.struct_(fields))
+  }
   case tag(tag) {
     var args = list[ObjectId]()
     for arg in tag.b do args.&.push(arg.to_object(universe))
     universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
   }
+  case type(type) universe.new(Object.string("{type}"))
 }
