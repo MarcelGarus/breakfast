@@ -11,6 +11,7 @@ struct ObjectId { int: Int } | index in the objects list
 enum Object {
   int: Int,
   string: String,
+  struct_: Map[String, ObjectId],
   tag: TagObject,
   code: CodeObject, | code from one compilation unit
 }
@@ -24,6 +25,8 @@ enum ByteCodeInstruction {
   pop_n_below_top: Int, | pops n objects, skipping the top object
   jump: Int, | jumps to the given instruction index inside this function
   jump_table: Map[String, Int], | peeks at the top value (a tag). depending on the symbol, jumps to different instruction indices
+  struct_: List[String], | pops the same number of values, pushes a struct
+  member: String, | pops a struct, pushes its member with the given name
   tag: Tuple2[String, Int], | symbol and number of arguments
   untag, | consumes a tag, pushes all its args on the stack
   call: FunId, | calls another function from the same compilation unit
@@ -64,6 +67,11 @@ fun write[W](writer: W, object: Object) {
   switch object
   case int(int) writer."{int}"
   case string(string) writer."{string.debug()}"
+  case struct_(struct_) {
+    writer."(&"
+    for field in struct_ do writer." {field.key}: {field.value}"
+    writer.")"
+  }
   case tag(tag) {
     writer."({tag.symbol}"
     for arg in tag.args do writer." {arg}"
@@ -75,6 +83,14 @@ fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
   switch universe.get(id)
   case int(int) writer."{int}"
   case string(string) writer."{string.debug()}"
+  case struct_(struct_) {
+    writer."(&"
+    for field in struct_ do {
+      writer." {field.key}: "
+      writer.write_deep(field.value, universe)
+    }
+    writer.")"
+  }
   case tag(tag) {
     writer."({tag.symbol}"
     for arg in tag.args do {
@@ -104,6 +120,11 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
     writer."jump to:"
     for entry in table do writer."\n        |   {entry.key} -> {entry.value}"
   }
+  case struct_(field_names) {
+    writer."struct with fields"
+    for name in field_names do writer." {name}"
+  }
+  case member(name) writer."get member {name}"
   case tag(tag) writer."tag {tag.a} with {tag.b} args"
   case untag writer."untag"
   case call(function) writer."call {function}"
@@ -174,6 +195,35 @@ fun compile(
     case uninitialized {}
     case comptime(value)
       instructions.push(ByteCodeInstruction.push_object(value.to_object(universe)))
+    case struct_(struct_) {
+      var fields = list[String]()
+      for field in struct_ do fields.&.push(field.key)
+      for field in fields do {
+        var value = struct_.get(field)
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(value)
+        ))
+        stack_model.push(value)
+      }
+      instructions.push(ByteCodeInstruction.struct_(fields))
+      stack_model.pop(fields.len)
+    }
+    case member(member) {
+      instructions.push(ByteCodeInstruction.push_from_stack(
+        stack_model.find_distance_from_top(member.of)
+      ))
+      instructions.push(ByteCodeInstruction.member(member.name))
+    }
+    case tag(tag) {
+      for arg in tag.args do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(arg)
+        ))
+        stack_model.push(arg)
+      }
+      instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
+      stack_model.pop(tag.args.len)
+    }
     case switch_(switch_) {
       instructions.push(ByteCodeInstruction.push_from_stack(
         stack_model.find_distance_from_top(switch_.condition)
@@ -203,16 +253,6 @@ fun compile(
       for jump in end_jumps do
         instructions.get_ref(jump).* = ByteCodeInstruction.jump(end)
       instructions.get_ref(jump_table_index).* = ByteCodeInstruction.jump_table(table)
-    }
-    case tag(tag) {
-      for arg in tag.args do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(arg)
-        ))
-        stack_model.push(arg)
-      }
-      instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
-      stack_model.pop(tag.args.len)
     }
     case call(call) {
       for arg in call.args do {

@@ -11,6 +11,7 @@ import plum.mar
 enum PlumType {
   primitive: String,
   never,
+  struct_: Map[String, PlumType],
   enum_: Map[String, Slice[PlumType]],
   recursive: Int,
 }
@@ -28,6 +29,7 @@ var type_type_info = PlumType.enum_(map(
   "Int"    -> empty_slice[PlumType](),
   "String" -> empty_slice[PlumType](),
   "Type"   -> empty_slice[PlumType](),
+  "Struct"   -> empty_slice[PlumType](),
   "Enum"   -> empty_slice[PlumType](),
 ))
 
@@ -35,6 +37,7 @@ fun ==(a: PlumType, b: PlumType): Bool {
   switch a
   case primitive(a) if b is primitive(b) then a == b else false
   case never(a)     if b is never(b)     then a == b else false
+  case struct_(a)   if b is struct_(b)   then a == b else false
   case enum_(a)     if b is enum_(b)     then a == b else false
   case recursive(a) if b is recursive(b) then a == b else false
 }
@@ -42,14 +45,24 @@ fun hash(hasher: &Hasher, type: PlumType) {
   switch type
   case primitive { hasher.hash(0) }
   case never     { hasher.hash(1) }
-  case enum_     { hasher.hash(2) }
-  case recursive { hasher.hash(3) }
+  case struct_   { hasher.hash(2) }
+  case enum_     { hasher.hash(3) }
+  case recursive { hasher.hash(4) }
 }
 
 fun write[W](writer: W, type: PlumType) {
   switch type
   case primitive(name) writer."{name}"
   case never writer."Never"
+  case struct_(fields) {
+    writer."(& "
+    var first = true
+    for field in fields do {
+      if first then first = false else writer." "
+      writer."{field.key}: {field.value}"
+    }
+    writer.")"
+  }
   case enum_(variants) {
     writer."(| "
     var first = true
@@ -168,6 +181,17 @@ fun match_against_logic(
     }
   }
   case never concrete is never
+  case struct_(generic_fields) {
+    var concrete_fields = concrete.struct_ or return false
+    for field in concrete_fields do {
+      var concrete_type = field.value
+      var generic_type = generic_fields.get_maybe(field.key) or return false
+      concrete_type.match_against(generic_type, constraints, currently_matching)
+    }
+    for field in generic_fields do
+      concrete_fields.contains(field.key) or return false
+    true
+  }
   case enum_(generic_variants) {
     var concrete_variants = concrete.enum_ or return false
     for variant in concrete_variants do {
@@ -202,6 +226,12 @@ fun specialize(
   case primitive(name)
     substitutions.substitutions.get_maybe(name) or PlumType.primitive(name)
   case never PlumType.never
+  case struct_(struct_) {
+    var fields = map[String, PlumType]()
+    for field in struct_ do
+      fields.&.put(field.key, field.value.specialize(substitutions))
+    PlumType.struct_(fields)
+  }
   case enum_(enum_) {
     var variants = map[String, Slice[PlumType]]()
     for variant in enum_ do {
@@ -257,6 +287,27 @@ fun extend_one_level(type: PlumType): PlumType {
   switch type
   case primitive(name) PlumType.primitive(name)
   case never PlumType.never
+  case struct_(fields) PlumType.struct_({
+    var new_fields = map[String, PlumType]()
+    for field in fields do
+      new_fields.&.put(field.key, {
+        | Type that is the original struct except the field that we navigate
+        | into. This field has been replaced with a recursive type.
+        var extension = {
+          var ext_fields = map[String, PlumType]()
+          for ext_field in fields do
+            ext_fields.&.put(
+              ext_field.key,
+              if ext_field.key == field.key
+              then PlumType.recursive(-1)
+              else ext_field.value
+            )
+          PlumType.struct_(ext_fields)
+        }
+        field.value.extend_recursive_types(1, extension)
+      })
+    new_fields
+  })
   case enum_(variants) PlumType.enum_({
     var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
@@ -300,6 +351,13 @@ fun extend_recursive_types(
   switch type
   case primitive(name) PlumType.primitive(name)
   case never PlumType.never
+  case struct_(fields) {
+    var new_fields = map[String, PlumType]()
+    for field in fields do
+      new_fields.&.put(
+        field.key, field.value.extend_recursive_types(level + 1, extension))
+    PlumType.struct_(new_fields)
+  }
   case enum_(variants) {
     var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
@@ -321,6 +379,13 @@ fun replace_recursive_level(type: PlumType, from: Int, to: Int): PlumType {
   switch type
   case primitive(name) PlumType.primitive(name)
   case never PlumType.never
+  case struct_(fields) {
+    var new_fields = map[String, PlumType]()
+    for field in fields do
+      new_fields.&.put(
+        field.key, field.value.replace_recursive_level(from, to))
+    PlumType.struct_(new_fields)
+  }
   case enum_(variants) {
     var new_variants = map[String, Slice[PlumType]]()
     for variant in variants do
@@ -374,6 +439,17 @@ fun is_equivalent_logic(
   switch a
   case primitive(name) {b.primitive or return false} == name
   case never  b is never
+  case struct_(a_fields) {
+    var b_fields = b.struct_ or return false
+    a_fields.size == b_fields.size or return false
+
+    for a_field in a_fields do {
+      var a_type = a_field.value
+      var b_type = b_fields.get_maybe(a_field.key) or return false
+      is_equivalent(a_type, b_type, currently_comparing) or return false
+    }
+    true
+  }
   case enum_(a_variants) {
     var b_variants = b.enum_ or return false
     a_variants.size == b_variants.size or return false
@@ -459,6 +535,19 @@ fun join_logic(
     some(PlumType.primitive(a_name))
   }
   case never unreachable()
+  case struct_(a_fields) {
+    var b_fields = b.struct_ or return none[PlumType]()
+    var fields = map[String, PlumType]()
+    a_fields.size == b_fields.size or return none[PlumType]()
+    for a_field in a_fields do {
+      var key = a_field.key
+      var a_type = a_field.value
+      var b_type = b_fields.get_maybe(key) or return none[PlumType]()
+      fields.&.put(key,
+        join(a_type, b_type, currently_joining) or return none[PlumType]())
+    }
+    some(PlumType.struct_(fields))
+  }
   case enum_(a_variants) {
     var b_variants = b.enum_ or return none[PlumType]()
     var variants = map[String, Slice[PlumType]]()

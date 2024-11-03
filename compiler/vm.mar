@@ -72,6 +72,20 @@ fun call(universe: &Universe, fun_: MainFun, args: Slice[ObjectId]): ObjectId {
       var symbol = vm.get(vm.data_stack.last()).tag.unwrap().symbol
       current_call.instruction_index = table.get(symbol)
     }
+    case struct_(field_names) {
+      var num_fields = field_names.len
+      var field_values = uninitialized_slice[ObjectId](num_fields)
+      for i in 0..num_fields do field_values.get_ref(num_fields - 1 - i).* = vm.&.pop()
+
+      var fields = map[String, ObjectId]()
+      for field in zip(field_names.iter(), field_values.iter()) do
+        fields.&.put(field.a, field.b)
+      vm.&.push(vm.&.new(Object.struct_(fields)))
+    }
+    case member(name) {
+      var field = vm.get(vm.&.pop()).struct_.unwrap().get(name)
+      vm.&.push(field)
+    }
     case tag(tag) {
       var symbol = tag.a
       var num_args = tag.b

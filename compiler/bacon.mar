@@ -68,7 +68,8 @@ fun to_bacon(content: String): Bacon {
 
     | Insert the line, creating an extra block if it starts with a special char.
     var first_char = line.chars().get(0)
-    var create_extra_block = first_char == #% or first_char == #|
+    var create_extra_block =
+      first_char == #& or first_char == #| or first_char == #%
     node.children.&.push(
       if create_extra_block then
         OngoingBacon {

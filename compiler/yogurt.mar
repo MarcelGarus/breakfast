@@ -25,11 +25,14 @@ enum YogurtOp {
   param,
   uninitialized,
   comptime: YogurtValue,
-  switch_: YogurtSwitch,
+  struct_: Map[String, YogurtId],
+  member: YogurtMember,
   tag: YogurtTag,
+  switch_: YogurtSwitch,
   call: YogurtCall,
   instruction: YogurtInstruction,
 }
+struct YogurtMember { of: YogurtId, name: String }
 struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
 struct YogurtTag { symbol: String, args: Slice[YogurtId] }
 struct YogurtCall { receiver: YogurtSignature, args: Slice[YogurtId] }
@@ -86,6 +89,15 @@ fun write[W](
   case uninitialized writer."uninitialized"
   case comptime(value) writer."comptime {value}"
   case param(param) writer."param {param}"
+  case struct_(struct_) {
+    writer."&"
+    for field in struct_ do writer." {field.key}: {field.value}"
+  }
+  case member(member) writer."{member.of}.{member.name}"
+  case tag(tag) {
+    writer."tag {tag.symbol}"
+    for arg in tag.args do writer." {arg}"
+  }
   case switch_(switch_) {
     writer."switch {switch_.condition}"
     for case_ in switch_.cases do {
@@ -94,10 +106,6 @@ fun write[W](
       writer."  {case_.key}:"
       writer.write(case_.value, fun_, indentation + 2)
     }
-  }
-  case tag(tag) {
-    writer."tag {tag.symbol}"
-    for arg in tag.args do writer." {arg}"
   }
   case call(call) {
     writer."call \"{call.receiver}\""
@@ -341,10 +349,37 @@ fun to_yogurt(
 ): Result[YogurtId, Error] {
   var expr =
     switch expr.kind
+    case param unreachable()
     case int(int) yogurt_value_int(int).to_expr()
     case string(string) yogurt_value_string(string).to_expr()
     case symbol(symbol) yogurt_value_symbol(symbol).to_expr()
-    case param unreachable()
+    case struct_(struct_) {
+      var fields = map[String, YogurtId]()
+      var field_types = map[String, PlumType]()
+      for field in struct_ do {
+        var field_id = compiler.lookup(field.value)
+        var type = builder.get(field_id).type
+        fields.&.put(field.key, field_id)
+        field_types.&.put(field.key, type)
+      }
+
+      YogurtOp.struct_(fields) $ PlumType.struct_(field_types)
+    }
+    case member(member) {
+      var of = compiler.lookup(member.of)
+      var of_expr = builder.get(of)
+      var of_type = of_expr.type.extend_one_level()
+      var of_fields = of_type.struct_
+        or return error[YogurtId, Error](error(
+          "Looked for member on non-struct: {of_type}", expr.src
+        ))
+      var field_type = of_fields.get_maybe(member.name)
+        or return error[YogurtId, Error](error(
+          "{member.name} doesn't exist: {of_fields}", expr.src
+        ))
+
+      YogurtOp.member(YogurtMember { of, name = member.name }) $ field_type
+    }
     case switch_(switch_) {
       var condition = compiler.lookup(switch_.condition)
       var condition_expr = builder.get(condition)
@@ -700,6 +735,7 @@ fun to_yogurt(
         switch type.kind.type.unwrap()
         case primitive(name) "{name}"
         case never "Never"
+        case struct_ "Struct"
         case enum_ "Enum"
         case recursive unreachable()
       builder.&.push(YogurtOp.comptime(yogurt_value_symbol(symbol))

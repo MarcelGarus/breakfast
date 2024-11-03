@@ -17,9 +17,11 @@ struct ToastTypeDef {
 enum ToastType {
   variable: StringAndSrc,
   call: ToastTypeCall,
+  struct_: List[ToastTypeField],
   enum_: List[ToastTypeCase],
 }
 struct ToastTypeCall { name: StringAndSrc, args: Slice[ToastType] }
+struct ToastTypeField { name: StringAndSrc, type: ToastType }
 struct ToastTypeCase { name: StringAndSrc, args: Slice[ToastType] }
 
 struct ToastFun {
@@ -33,13 +35,17 @@ struct ToastExpr { kind: ToastExprKind, src: Src }
 enum ToastExprKind {
   int: Int,
   string: String,
+  struct_: Slice[ToastField],
+  member: ToastMember,
   symbol: String,
-  name: String,
   switch_: ToastSwitch,
+  name: String,
   call: ToastCall,
   var_: ToastVar,
   body: Slice[ToastExpr],
 }
+struct ToastField { name: StringAndSrc, value: ToastExpr }
+struct ToastMember { of: &ToastExpr, name: StringAndSrc }
 struct ToastSwitch { condition: &ToastExpr, cases: Slice[ToastCase] }
 struct ToastCase { symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr }
 struct ToastCall { receiver: &ToastExpr, args: Slice[ToastExpr] }
@@ -251,29 +257,41 @@ fun parse_symbol(parser: &Parser): Maybe[StringAndSrc] {
 }
 | Parses an expression that doesn't include whitespace (except in parentheses).
 fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
-  if parser.consume(#() is some(paren_src) then {
-    var expr = parser.parse_expr()? or
+  var start = parser.cursor
+  var expr =
+    if parser.consume(#() is some(paren_src) then {
+      var expr = parser.parse_expr()? or
+        return bad_input[ToastExpr](error(
+          "Expected expression after parenthesis.", paren_src
+        ))
+      parser.consume(#)) or
+        return bad_input[ToastExpr](error(
+          "Expected the closing parenthesis.",
+          parser.src_of_rest()
+        ))
+      expr
+    } else if parser.parse_int() is some(int) then
+      ToastExprKind.int(int) @ parser.src_from_until_cursor(start)
+    else if parser.parse_string()? is some(str) then
+      ToastExprKind.string(str) @ parser.src_from_until_cursor(start)
+    else if parser.parse_name() is some(name) then
+      ToastExprKind.name(name.string) @ name.src
+    else if parser.parse_symbol() is some(symbol) then
+      ToastExprKind.symbol(symbol.string) @ symbol.src
+    else return no_match[ToastExpr]()
+
+  loop {
+    parser.consume(#.) or break
+    var name = parser.parse_name() or
       return bad_input[ToastExpr](error(
-        "Expected expression after parenthesis.", paren_src
+        "Expected name of the field", parser.src_of_rest()
       ))
-    parser.consume(#)) or
-      return bad_input[ToastExpr](error(
-        "Expected the closing parenthesis.",
-        parser.src_of_rest()
-      ))
-    return parsed(expr)
+    expr = ToastExprKind.member(ToastMember {
+      of = expr.put_on_heap(), name
+    }) @ {expr.src ... name.src}
   }
 
-  var start = parser.cursor
-  if parser.parse_int() is some(int) then
-    return parsed(ToastExprKind.int(int) @ parser.src_from_until_cursor(start))
-  if parser.parse_string()? is some(str) then
-    return parsed(ToastExprKind.string(str) @ parser.src_from_until_cursor(start))
-  if parser.parse_name() is some(name) then
-    return parsed(ToastExprKind.name(name.string) @ name.src)
-  if parser.parse_symbol() is some(symbol) then
-    return parsed(ToastExprKind.symbol(symbol.string) @ symbol.src)
-  no_match[ToastExpr]()
+  parsed(expr)
 }
 | Parses an expression that doesn't contain pipes (except in parentheses).
 fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
@@ -353,7 +371,45 @@ fun create_var(
 }
 
 fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
-  if bacon.line == "|" then {
+  if bacon.line == "&" then {
+    var fields = list[ToastTypeField]()
+    for field in bacon.children do {
+      var parser = parser(field.line, field.src)
+      var name = parser.&.parse_name() or
+        return error[ToastType, Error](error(
+          "Expected field name.", parser.src_of_rest()
+        ))
+      parser.&.consume(":") or
+        return error[ToastType, Error](error(
+          "Expected colon after field name.", parser.src_of_rest()
+        ))
+      var type =
+        if field.children.is_empty() then {
+          var type = parser.&.parse_type_expr()? or
+            return error[ToastType, Error](error(
+              "Expected type of field.", parser.src_of_rest()
+            ))
+          parser.&.is_done() or
+            return error[ToastType, Error](error(
+              "Additional garbage on line.", parser.src_of_rest()
+            ))
+          type
+        } else {
+          parser.&.is_done() or
+            return error[ToastType, Error](error(
+              "Additional garbage on line.", parser.src_of_rest()
+            ))
+          var children = field.children.to_toast_types()?
+          children.len == 1 or
+            return error[ToastType, Error](error(
+              "Fields can only have one type.", parser.src_of_rest()
+            ))
+          children.get(0)
+        }
+      fields.&.push(ToastTypeField { name, type })
+    }
+    ok[ToastType, Error](ToastType.struct_(fields))
+  } else if bacon.line == "|" then {
     var variants = list[ToastTypeCase]()
     for variant in bacon.children do {
       var parser = parser(variant.line, variant.src)
@@ -447,6 +503,7 @@ fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
 }
 
 fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
+  if bacon.to_toast_struct()? is some(expr) then return parsed(expr)
   var parser = parser(bacon.line, bacon.src)
   if parser.&.consume(##) is some then return no_match[ToastExpr]()
   var expr = parser.&.parse_expr()? or
@@ -471,6 +528,49 @@ fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
       "Additional garbage on line.", parser.src_of_rest()
     ))
   parsed(expr)
+}
+fun to_toast_struct(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
+  bacon.line == "&" or return no_match[ToastExpr]()
+  var fields = list[ToastField]()
+  for field in bacon.children do {
+    var parser = parser(field.line, field.src)
+    var name = parser.&.parse_name() or
+      return bad_input[ToastExpr](error(
+        "Expected field name.", parser.src_of_rest()
+      ))
+    parser.&.consume(":") or
+      return bad_input[ToastExpr](error(
+        "Expected colon after field name.", parser.src_of_rest()
+      ))
+    var value =
+      if field.children.is_empty() then {
+        var value = parser.&.parse_expr()? or
+          return bad_input[ToastExpr](error(
+            "Expected value of field.", parser.src_of_rest()
+          ))
+        parser.&.is_done() or
+          return bad_input[ToastExpr](error(
+            "Additional garbage on line.", parser.src_of_rest()
+          ))
+        value
+      } else {
+        parser.&.is_done() or
+          return bad_input[ToastExpr](error(
+            "Additional garbage on line.", parser.src_of_rest()
+          ))
+        var children = field.children.to_toast_exprs()?
+        children.len == 1 or
+          return bad_input[ToastExpr](error(
+            "Fields can only have one value.", parser.src_of_rest()
+          ))
+        children.get(0)
+      }
+    fields.&.push(ToastField { name, value })
+  }
+  parsed(
+    ToastExprKind.struct_(fields.to_slice())
+      @ {bacon.src ... fields.last().value.src}
+  )
 }
 fun parse_switch(
   bacon: Bacon, condition: ToastExpr

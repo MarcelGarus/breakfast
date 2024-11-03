@@ -32,11 +32,14 @@ enum EggExprKind {
   param,
   int: Int,
   string: String,
+  struct_: Map[String, EggId],
+  member: EggMember,
   symbol: String,
   switch_: EggSwitch,
   tag: EggTag,
   call: EggCall,
 }
+struct EggMember { of: EggId, name: String }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggTag { symbol: String, args: Slice[EggId] }
 struct EggCall { receiver: StringAndSrc, args: Slice[EggId] }
@@ -80,10 +83,19 @@ fun write[W](writer: W, param: EggParam) {
 }
 fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   switch expr.kind
+  case param(param) writer."param {param}"
   case int(int) writer."int {int}"
   case string(string) writer."string {string.debug()}"
+  case struct_(struct_) {
+    writer."&"
+    for field in struct_ do {
+      writer."\n"
+      for i in 0..indentation do writer."  "
+      writer."  {field.key}: {field.value}"
+    }
+  }
+  case member(member) writer."{member.of}.{member.name}"
   case symbol(symbol) writer."symbol {symbol}"
-  case param(param) writer."param {param}"
   case switch_(switch_) {
     writer."switch {switch_.condition}"
     for case_ in switch_.cases do {
@@ -252,6 +264,16 @@ fun to_egg(
         }
     return error[PlumType, Error](error("{name.string} doesn't exist.", name.src))
   }
+  case struct_(struct_) {
+    var fields = map[String, PlumType]()
+    | TODO: check for duplicates
+    for field in struct_ do
+      fields.&.put(
+        field.name.string,
+        field.type.to_egg(toast, env, parent_calls, depth + 1)?
+      )
+    ok[PlumType, Error](PlumType.struct_(fields))
+  }
   case enum_(enum_) {
     var variants = map[String, Slice[PlumType]]()
     for variant in enum_ do {
@@ -308,12 +330,20 @@ fun to_egg(
     switch toast.kind
     case int(int) body.push(EggExprKind.int(int) @ toast.src)
     case string(str) body.push(EggExprKind.string(str) @ toast.src)
+    case struct_(struct_) {
+      var fields = map[String, EggId]()
+      | TODO: check for duplicates
+      for field in struct_ do
+        fields.&.put(field.name.string, field.value.to_egg(body, visible)?)
+      body.push(EggExprKind.struct_(fields) @ toast.src)
+    }
+    case member(member) {
+      var of = member.of.to_egg(body, visible)?
+      body.push(EggExprKind.member(EggMember {
+        of, name = member.name.string
+      }) @ toast.src)
+    }
     case symbol(symbol) body.push(EggExprKind.symbol(symbol) @ toast.src)
-    case name(name)
-      visible.lookup(name) or
-        return error[EggId, Error](error(
-          "Unknown referenced name {name}.", toast.src
-        ))
     case switch_(switch_) {
       var condition = switch_.condition.to_egg(body, visible)?
       var cases = map[String, EggBody]()
@@ -329,6 +359,11 @@ fun to_egg(
       }
       body.push(EggExprKind.switch_(EggSwitch { condition, cases }) @ toast.src)
     }
+    case name(name)
+      visible.lookup(name) or
+        return error[EggId, Error](error(
+          "Unknown referenced name {name}.", toast.src
+        ))
     case call(call) {
       var args = list[EggId]()
       for arg in call.args do args.&.push(arg.to_egg(body, visible)?)
