@@ -202,8 +202,9 @@ fun src(expr: ToastExpr): Src {
   case body(body) body.first().src() ... body.last().src()
 }
 
-| In this file, parsing refers to converting a single line of code into
-| something toasty.
+| Parsing  
+| The parser walks through a string from start to end. It maintains a cursor to
+| do that.
 
 struct Parser { input: String, input_src: Src, cursor: Int }
 fun parser(input: String, src: Src): _ {
@@ -214,9 +215,6 @@ fun src_of(parser: Parser, cursor_range: Range[Int]): Src {
   parser.input_src.with_range(
     {start_offset + cursor_range.start}..{start_offset + cursor_range.end}
   )
-}
-fun src_from_until_cursor(parser: Parser, start: Int): Src {
-  parser.src_of(start..parser.cursor)
 }
 fun src_of_rest(parser: Parser): Src {
   parser.input_src.with_range(
@@ -238,27 +236,18 @@ fun is_done(parser: &Parser): Bool {
   parser.consume_whitespace()
   parser.is_at_end()
 }
-fun consume(parser: &Parser, char: Char): Maybe[Src] {
-  parser.consume_whitespace()
-  parser.current() == char or return none[Src]()
-  var src = parser.input_src.with_range(
-    {parser.input_src.range.start + parser.cursor} ..+ 1)
-  parser.advance()
-  some(src)
-}
-fun consume(parser: &Parser, prefix: String): Maybe[Src] {
+fun consume(parser: &Parser, prefix: String): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   var start = parser.cursor
   for char in prefix.chars() do {
     parser.current() == char or {
       parser.cursor = start
-      return none[Src]()
+      return none[StringAndSrc]()
     }
     parser.advance()
   }
-  some(
-    parser.input_src.with_range({parser.input_src.range.start + start} ..+ 1)
-  )
+  var end = parser.cursor
+  some(prefix @ parser.src_of(start..end))
 }
 
 fun no_match[T](): Result[Maybe[T], Error] {
@@ -286,8 +275,7 @@ fun parse_int(parser: &Parser): Maybe[IntAndSrc] {
   some(num @ parser.src_of(start..end))
 }
 fun parse_string(parser: &Parser): Result[Maybe[StringAndSrc], Error] {
-  var start_including_quote = parser.cursor
-  parser.consume(#") or return no_match[StringAndSrc]()
+  var start_quote = parser.consume("\"") or return no_match[StringAndSrc]()
   var start = parser.cursor
   loop {
     if parser.is_at_end() then
@@ -299,11 +287,8 @@ fun parse_string(parser: &Parser): Result[Maybe[StringAndSrc], Error] {
   }
   var end = parser.cursor
   parser.advance() | consume the "
-  var end_including_quote = parser.cursor
-  parsed(
-    parser.input.substr(start..end)
-      @ parser.src_of(start_including_quote..end_including_quote)
-  )
+  var end_quote = "\"" @ parser.src_of(end ..+ 1)
+  parsed(parser.input.substr(start..end) @ {start_quote.src ... end_quote.src})
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/<>"
 fun parse_identifier(parser: &Parser): Maybe[StringAndSrc] {
@@ -336,12 +321,12 @@ fun parse_symbol(parser: &Parser): Maybe[StringAndSrc] {
 fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   var start = parser.cursor
   var expr =
-    if parser.consume(#() is some(paren_src) then {
+    if parser.consume("(") is some(paren) then {
       var expr = parser.parse_expr()? or
         return bad_input[ToastExpr](error(
-          "Expected expression after parenthesis.", paren_src
+          "Expected expression after parenthesis.", paren.src
         ))
-      parser.consume(#)) or
+      parser.consume(")") or
         return bad_input[ToastExpr](error(
           "Expected the closing parenthesis.",
           parser.src_of_rest()
@@ -354,7 +339,7 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
     else return no_match[ToastExpr]()
 
   loop {
-    parser.consume(#.) or break
+    parser.consume(".") or break
     var name = parser.parse_name() or
       return bad_input[ToastExpr](error(
         "Expected name of the field", parser.src_of_rest()
@@ -385,19 +370,19 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   var expr = parser.parse_unpiped_expr()? or return no_match[ToastExpr]()
 
   loop {
-    parser.consume(#|) or break
+    parser.consume("|") or break
     var piped_into = parser.parse_unpiped_expr()? or
       return bad_input[ToastExpr](error(
         "Expected expression", parser.src_of_rest()
       ))
     expr = piped_call(expr, piped_into)
   }
-  if parser.consume(#=) is some(equals_src) then {
-    var cursor_after_equals_sign = parser.cursor
+  if parser.consume("=") is some(equal_sign) then {
+    var cursor_after_equal_sign = parser.cursor
     if parser.parse_expr()? is some(value) then
-      expr = ToastExpr.var_(create_var(expr, value, equals_src)?)
+      expr = ToastExpr.var_(create_var(expr, value, equal_sign.src)?)
     else
-      parser.cursor = cursor_after_equals_sign - 1
+      parser.cursor = cursor_after_equal_sign - 1
   }
 
   parsed(expr)
@@ -415,12 +400,12 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 | }
 
 fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
-  if parser.consume(#() is some(paren_src) then {
+  if parser.consume("(") is some(paren) then {
     var type = parser.parse_type_expr()? or
       return bad_input[ToastType](error(
-        "Expected expression after parenthesis.", paren_src
+        "Expected expression after parenthesis.", paren.src
       ))
-    parser.consume(#)) or
+    parser.consume(")") or
       return bad_input[ToastType](error(
         "Expected a closing parenthesis.", parser.src_of_rest()
       ))
@@ -573,7 +558,7 @@ fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
   var name = parser.&.parse_symbol() or return no_match[ToastTypeDef]()
   var params = list[StringAndSrc]()
   loop params.&.push(parser.&.parse_name() or break)
-  parser.&.consume(#=) or
+  parser.&.consume("=") or
     return bad_input[ToastTypeDef](error(
       "expected = after type signature", parser.src_of_rest()
     ))
@@ -608,18 +593,18 @@ fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
   if bacon.parse_lambda()? is some(lambda) then return parsed(lambda)
 
   var parser = parser(bacon.line, bacon.src)
-  if parser.&.consume(##) is some then return no_match[ToastExpr]()
+  if parser.&.consume("#") is some then return no_match[ToastExpr]()
   var expr = parser.&.parse_expr()? or
     return bad_input[ToastExpr](error(
       "Expected expression", parser.src_of_rest()
     ))
   var children = bacon.children.to_toast_exprs()?
-  if parser.&.consume(#=) is some(equals_src) then {
+  if parser.&.consume("=") is some(equal_sign) then {
     if children.is_empty() then return bad_input[ToastExpr](error(
-      "Expected a body.", equals_src
+      "Expected a body.", equal_sign.src
     ))
     expr = ToastExpr.var_(
-      create_var(expr, ToastExpr.body(children), equals_src)?
+      create_var(expr, ToastExpr.body(children), equal_sign.src)?
     )
   } else if children.is_not_empty() then
     expr = ToastExpr.call(ToastCall {
@@ -676,13 +661,12 @@ fun to_toast_struct(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
 }
 fun parse_lambda(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
   var parser = parser(bacon.line, bacon.src)
-  var backslash_src = parser.&.consume("\\") or return no_match[ToastExpr]()
-  var backslash = "\\" @ backslash_src
+  var backslash = parser.&.consume("\\") or return no_match[ToastExpr]()
 
   var params = list[ToastParam]()
   loop params.&.push(parser.&.parse_param()? or break)
 
-  var equals_src = parser.&.consume("=") or
+  var equal_sign = parser.&.consume("=") or
     return bad_input[ToastExpr](error(
       "Expected equals sign.", parser.src_of_rest()
     ))
@@ -705,7 +689,7 @@ fun parse_lambda(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
         ))
       var children = bacon.children.to_toast_exprs()?
       if children.is_empty() then
-        return bad_input[ToastExpr](error("Expected lambda body.", equals_src))
+        return bad_input[ToastExpr](error("Expected lambda body.", equal_sign.src))
       ToastExpr.body(children)
     }
 
@@ -729,7 +713,7 @@ fun parse_switch(
       ))
     var params = list[StringAndSrc]()
     loop params.&.push(parser.&.parse_name() or break)
-    var colon_src = parser.&.consume(#:) or
+    var colon = parser.&.consume(":") or
       return bad_input[ToastExpr](error(
         "Expected a colon.", parser.src_of_rest()
       ))
@@ -738,7 +722,7 @@ fun parse_switch(
         var children = case_.children.to_toast_exprs()?
         if children.is_empty() then
           return bad_input[ToastExpr](error(
-          "Expected the body of the case.", colon_src,
+          "Expected the body of the case.", colon.src,
         ))
         ToastExpr.body(children)
       } else {
@@ -821,7 +805,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
       "expected return type",
       parser.src_of_rest()
     ))
-  var equals_src = parser.&.consume(#=) or
+  var equal_sign = parser.&.consume("=") or
     return bad_input[ToastFun](error(
       "expected =", parser.src_of_rest()
     ))
@@ -840,7 +824,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
     } else {
       var children = bacon.children.to_toast_exprs()?
       if children.is_empty() then
-        return bad_input[ToastFun](error("Expected function body.", equals_src))
+        return bad_input[ToastFun](error("Expected function body.", equal_sign.src))
       ToastExpr.body(children)
     }
 
@@ -848,7 +832,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
 }
 fun parse_param(parser: &Parser): Result[Maybe[ToastParam], Error] {
   var name = parser.parse_name() or return no_match[ToastParam]()
-  parser.consume(#:) or
+  parser.consume(":") or
     return bad_input[ToastParam](error(
       "Expected : after param {name.string}.", name.src
     ))
