@@ -27,7 +27,7 @@ fun main(): Never {
 
   var bacon = content.to_bacon()
   | println("Bacon:\n{bacon}\n")
-  
+
   var toast = bacon.to_toast() or(error) {
     stderr."Oh no! An error occurred:\n\n{error}\n"
     exit(1)
@@ -38,7 +38,7 @@ fun main(): Never {
     stderr."Oh no! An error occurred:\n\n{error}\n"
     exit(1)
   }
-  | println("Egg:\n{egg}\n")
+  println("Egg:\n{egg}\n")
 
   var yogurt = egg.to_yogurt() or(error) {
     stderr."Oh no! An error occurred:\n\n{error}\n"
@@ -60,6 +60,7 @@ fun main(): Never {
   var return_value = universe.&.call(main, list(five).to_slice())
   stdout.write_deep(return_value, universe)
   println()
+  println(universe)
 
   exit(0)
 }

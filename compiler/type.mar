@@ -13,8 +13,10 @@ enum PlumType {
   never,
   struct_: Map[String, PlumType],
   enum_: Map[String, Slice[PlumType]],
+  lambda: LambdaType,
   recursive: Int,
 }
+struct LambdaType { args: Slice[PlumType], return_type: &PlumType }
 
 var type_int = PlumType.primitive("Int")
 var type_string = PlumType.primitive("String")
@@ -53,7 +55,11 @@ fun ==(a: PlumType, b: PlumType): Bool {
   case never(a)     if b is never(b)     then a == b else false
   case struct_(a)   if b is struct_(b)   then a == b else false
   case enum_(a)     if b is enum_(b)     then a == b else false
+  case lambda(a)    if b is lambda(b)    then a == b else false
   case recursive(a) if b is recursive(b) then a == b else false
+}
+fun ==(a: LambdaType, b: LambdaType): Bool {
+  a.args == b.args and a.return_type.* == b.return_type.*
 }
 fun hash(hasher: &Hasher, type: PlumType) {
   switch type
@@ -61,7 +67,8 @@ fun hash(hasher: &Hasher, type: PlumType) {
   case never     { hasher.hash(1) }
   case struct_   { hasher.hash(2) }
   case enum_     { hasher.hash(3) }
-  case recursive { hasher.hash(4) }
+  case lambda    { hasher.hash(4) }
+  case recursive { hasher.hash(5) }
 }
 
 fun write[W](writer: W, type: PlumType) {
@@ -88,6 +95,11 @@ fun write[W](writer: W, type: PlumType) {
       if variant.value.is_not_empty() then writer.")"
     }
     writer.")"
+  }
+  case lambda(lambda) {
+    writer."(\\"
+    for arg in lambda.args do writer." {arg}"
+    writer." -> {lambda.return_type})"
   }
   case recursive(level) writer."^{level}"
 }
@@ -217,7 +229,16 @@ fun match_against_logic(
     }
     true
   }
-  case recursive todo()
+  case lambda(generic_lambda) {
+    var concrete_lambda = concrete.lambda or return false
+    concrete_lambda.args.match_against(
+      generic_lambda.args, constraints, currently_matching
+    ) or return false
+    concrete_lambda.return_type.*.match_against(
+      generic_lambda.return_type.*, constraints, currently_matching
+    ) or return false
+  }
+  case recursive unreachable()
 }
 fun match_against(
   concrete: Slice[PlumType], generic: Slice[PlumType],
@@ -256,6 +277,14 @@ fun specialize(
       variants.&.put(variant.key, args.to_slice())
     }
     PlumType.enum_(variants)
+  }
+  case lambda(lambda) {
+    var args = list[PlumType]()
+    for arg in lambda.args do args.&.push(arg.specialize(substitutions))
+    PlumType.lambda(LambdaType {
+      args = args.to_slice(),
+      return_type = lambda.return_type.specialize(substitutions).put_on_heap(),
+    })
   }
   case recursive(level) PlumType.recursive(level)
 }
@@ -359,6 +388,16 @@ fun extend_one_level(type: PlumType): PlumType {
       })
     new_variants
   })
+  case lambda(lambda) PlumType.lambda(LambdaType {
+    args = {
+      var args = list[PlumType]()
+      for arg in lambda.args do
+        args.&.push(arg.extend_recursive_types(1, type))
+      args.to_slice()
+    },
+    return_type = lambda.return_type
+      .extend_recursive_types(1, type).put_on_heap(),
+  })
   case recursive unreachable()
 }
 fun extend_recursive_types(
@@ -385,6 +424,17 @@ fun extend_recursive_types(
       })
     PlumType.enum_(new_variants)
   }
+  case lambda(lambda)
+    PlumType.lambda(LambdaType {
+      args = {
+        var args = list[PlumType]()
+        for arg in lambda.args do
+          args.&.push(arg.extend_recursive_types(level + 1, extension))
+        args.to_slice()
+      },
+      return_type = lambda.return_type
+        .extend_recursive_types(level + 1, extension).put_on_heap()
+    })
   case recursive(actual_level)
     if actual_level == level then
       extension.replace_recursive_level(-1, level)
@@ -413,6 +463,17 @@ fun replace_recursive_level(type: PlumType, from: Int, to: Int): PlumType {
       })
     PlumType.enum_(new_variants)
   }
+  case lambda(lambda)
+    PlumType.lambda(LambdaType {
+      args = {
+        var args = list[PlumType]()
+        for arg in lambda.args do
+          args.&.push(arg.replace_recursive_level(from, to))
+        args.to_slice()
+      },
+      return_type = lambda.return_type
+        .replace_recursive_level(from, to).put_on_heap()
+    })
   case recursive(actual_level)
     PlumType.recursive(if actual_level == from then to else actual_level)
 }
@@ -478,6 +539,15 @@ fun is_equivalent_logic(
         is_equivalent(both.a, both.b, currently_comparing) or return false
     }
     true
+  }
+  case lambda(a_lambda) {
+    var b_lambda = b.lambda or return false
+    a_lambda.args.len == b_lambda.args.len or return false
+    for both in zip(a_lambda.args.iter(), b_lambda.args.iter()) do
+      is_equivalent(both.a, both.b, currently_comparing) or return false
+    is_equivalent(
+      a_lambda.return_type.*, b_lambda.return_type.*, currently_comparing
+    )
   }
   case recursive unreachable()
 }
@@ -583,6 +653,18 @@ fun join_logic(
       })
     }
     some(PlumType.enum_(variants))
+  }
+  case lambda(a_lambda) {
+    | TODO: make parameters contravariant, return type covariant:
+    | foo: (\ (| B C) -> (X Y Z)) =
+    |   condition
+    |   % True:  \ a: (| A B C) -> (| X Y) = ...
+    |     False: \ a: (| B C D) -> (| X Y Z) = ...
+    a == b or return none[PlumType]()
+    | var b_lambda = b.lambda or return none[PlumType]()
+    | a_lambda.args == b_lambda.args or return none[PlumType]()
+    | a_lambda.return_type == b_lambda.return_type or return none[PlumType]()
+    some(a)
   }
   case recursive unreachable()
 }

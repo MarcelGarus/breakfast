@@ -97,6 +97,30 @@ fun call(universe: &Universe, fun_: MainFun, args: Slice[ObjectId]): ObjectId {
       var tag = vm.get(vm.&.pop()).tag.unwrap()
       for arg in tag.args do vm.&.push(arg)
     }
+    case lambda(fun_and_captured) {
+      var fun_ = fun_and_captured.a
+      var num_captured = fun_and_captured.b
+      var captured = uninitialized_slice[ObjectId](num_captured)
+      for i in 0..num_captured do
+        captured.get_ref(num_captured - 1 - i).* = vm.&.pop()
+      vm.&.push(vm.&.new(Object.lambda(LambdaObject {
+        code = current_call.code, fun_, captured
+      })))
+    }
+    case lambda_call(num_args) {
+      var lambda = vm.get(vm.&.pop()).lambda.unwrap()
+      var fun_ = vm.get(lambda.code).code.unwrap().get(lambda.fun_)
+
+      var args = uninitialized_slice[ObjectId](num_args)
+      for i in 0..num_args do args.get_ref(num_args - 1 - i).* = vm.&.pop()
+
+      for capture in lambda.captured do vm.&.push(capture)
+      for arg in args do vm.&.push(arg)
+
+      vm.call_stack.&.push(CallStackEntry {
+        code = lambda.code, fun_ = lambda.fun_, instruction_index = 0
+      })
+    }
     case call(fun_)
       vm.call_stack.&.push(CallStackEntry {
         code = current_call.code, fun_, instruction_index = 0

@@ -19,10 +19,12 @@ enum ToastType {
   call: ToastTypeCall,
   struct_: List[ToastTypeField],
   enum_: List[ToastTypeCase],
+  lambda: ToastTypeLambda,
 }
 struct ToastTypeCall { name: StringAndSrc, args: Slice[ToastType] }
 struct ToastTypeField { name: StringAndSrc, type: ToastType }
 struct ToastTypeCase { name: StringAndSrc, args: Slice[ToastType] }
+struct ToastTypeLambda { args: Slice[ToastType], return_type: &ToastType }
 
 struct ToastFun {
   name: StringAndSrc,
@@ -40,6 +42,7 @@ enum ToastExprKind {
   symbol: String,
   switch_: ToastSwitch,
   name: String,
+  lambda: ToastLambda,
   call: ToastCall,
   var_: ToastVar,
   body: Slice[ToastExpr],
@@ -48,6 +51,7 @@ struct ToastField { name: StringAndSrc, value: ToastExpr }
 struct ToastMember { of: &ToastExpr, name: StringAndSrc }
 struct ToastSwitch { condition: &ToastExpr, cases: Slice[ToastCase] }
 struct ToastCase { symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr }
+struct ToastLambda { params: Slice[ToastParam], body: &ToastExpr }
 struct ToastCall { receiver: &ToastExpr, args: Slice[ToastExpr] }
 struct ToastVar { name: String, value: &ToastExpr }
 
@@ -62,14 +66,14 @@ fun write[W](writer: W, toast: Toast) {
     if first then first = false else writer."\n"
     switch def
     case type(def) {
-      writer."{def.name}"
-      for param in def.params do writer." {param}"
+      writer."{def.name.string}"
+      for param in def.params do writer." {param.string}"
       writer." = "
       writer."{def.type}"
     }
     case fun_(def) {
-      writer."{def.name}"
-      for param in def.params do writer." {param.name}: {param.type}"
+      writer."{def.name.string}"
+      for param in def.params do writer." {param.name.string}: {param.type}"
       writer." -> {def.return_type}"
       writer." =\n"
       writer.write(def.body, 1)
@@ -78,19 +82,28 @@ fun write[W](writer: W, toast: Toast) {
 }
 fun write[W](writer: W, type: ToastType) {
   switch type
-  case variable(variable) writer."{variable}"
+  case variable(variable) writer."{variable.string}"
   case call(call) {
-    writer."({call.name}"
+    writer."({call.name.string}"
     for arg in call.args do writer." {arg}"
     writer.")"
+  }
+  case struct_(fields) {
+    writer."&"
+    for field in fields do writer." {field.name.string}: {field.type}"
   }
   case enum_(variants) {
     writer."|"
     for variant in variants do {
-      writer." ({variant.key}"
-      for arg in variant.value do writer." {arg}"
+      writer." ({variant.name.string}"
+      for arg in variant.args do writer." {arg}"
       writer.")"
     }
+  }
+  case lambda(lambda) {
+    writer."(\\"
+    for arg in lambda.args do writer." {arg}"
+    writer." -> {lambda.return_type})"
   }
 }
 fun write[W](writer: W, body: Slice[ToastExpr], indentation: Int) {
@@ -106,17 +119,36 @@ fun write[W](writer: W, expr: ToastExpr, indentation: Int) {
   switch expr.kind
   case int(int) writer."{int} @ {expr.src}"
   case string(str) writer."\"{str}\""
+  case struct_(fields) {
+    var is_first = true
+    for field in fields do {
+      writer."{if is_first then "& " else "  "}{field.name.string}: \n"
+      writer.write(field.value, indentation + 2)
+      is_first = false
+    }
+    if fields.is_empty() then writer."&"
+  }
+  case member(member) {
+    writer."member {member.name.string}"
+    writer.write(member.of.*, indentation + 1)
+  }
   case symbol(symbol) writer."{symbol}"
-  case name(name) writer."{name}"
   case switch_(switch_) {
     writer."%\n"
     writer.write(switch_.condition.*, indentation + 1)
     for case_ in switch_.cases do {
       writer."\n"
       for i in 0..indentation do writer."  "
-      writer."  {case_.symbol}:\n"
+      writer."  {case_.symbol.string}:\n"
       writer.write(case_.body, indentation + 2)
     }
+  }
+  case name(name) writer."{name}"
+  case lambda(lambda) {
+    writer."\\"
+    for param in lambda.params do writer." {param.name.string}: {param.type}"
+    writer." =\n"
+    writer.write(lambda.body.*, indentation + 1)
   }
   case call(call) {
     writer."call\n"
@@ -295,6 +327,8 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 }
 | Parses an expression that doesn't contain pipes (except in parentheses).
 fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+  | if parser.parse_lambda()? is some(lambda) then return parsed(lambda)
+
   var expr = parser.parse_atom()? or return no_match[ToastExpr]()
 
   var args = list[ToastExpr]()
@@ -328,6 +362,18 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 
   parsed(expr)
 }
+| fun parse_lambda(parser: &Parser): Result[Maybe[ToastLambda], Error] {
+|   parser.consume("\\") or return no_match[ToastLambda]()
+
+|   var params = list[ToastParam]()
+|   loop params.&.push(parser.&.parse_param()? or break)
+
+|   parser.consume("=") or
+|     return bad_input[ToastLambda](error(
+|       "Expected equals sign.", parser.src_of_rest()
+|     ))
+| }
+
 fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
   if parser.consume(#() is some(paren_src) then {
     var type = parser.parse_type_expr()? or
@@ -349,6 +395,21 @@ fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
   no_match[ToastType]()
 }
 fun parse_type_expr(parser: &Parser): Result[Maybe[ToastType], Error] {
+  if parser.consume("\\") is some then {
+    var args = list[ToastType]()
+    loop args.&.push(parser.parse_type_atom()? or break)
+    parser.consume("->") or
+      return bad_input[ToastType](error(
+        "Expected lambda arrow ->.", parser.src_of_rest()
+      ))
+    var return_type = parser.parse_type_atom()? or
+      return bad_input[ToastType](error(
+        "Expected the lambda return type.", parser.src_of_rest()
+      ))
+    return parsed(ToastType.lambda(ToastTypeLambda {
+      args = args.to_slice(), return_type = return_type.put_on_heap(),
+    }))
+  }
   if parser.parse_symbol() is some(name) then {
     var args = list[ToastType]()
     loop args.&.push(parser.parse_type_atom()? or break)
@@ -504,6 +565,8 @@ fun to_toast_type_def(bacon: Bacon): Result[Maybe[ToastTypeDef], Error] {
 
 fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
   if bacon.to_toast_struct()? is some(expr) then return parsed(expr)
+  if bacon.parse_lambda()? is some(lambda) then return parsed(lambda)
+
   var parser = parser(bacon.line, bacon.src)
   if parser.&.consume(##) is some then return no_match[ToastExpr]()
   var expr = parser.&.parse_expr()? or
@@ -571,6 +634,46 @@ fun to_toast_struct(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
     ToastExprKind.struct_(fields.to_slice())
       @ {bacon.src ... fields.last().value.src}
   )
+}
+fun parse_lambda(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
+  var parser = parser(bacon.line, bacon.src)
+  var backslash_src = parser.&.consume("\\") or return no_match[ToastExpr]()
+
+  var params = list[ToastParam]()
+  loop params.&.push(parser.&.parse_param()? or break)
+
+  var equals_src = parser.&.consume("=") or
+    return bad_input[ToastExpr](error(
+      "Expected equals sign.", parser.src_of_rest()
+    ))
+
+  var body =
+    if bacon.children.is_empty() then {
+      var body = parser.&.parse_expr()? or
+        return bad_input[ToastExpr](error(
+          "Expected body of the lambda.", parser.src_of_rest()
+        ))
+      parser.&.is_done() or
+        return bad_input[ToastExpr](error(
+          "Additional garbage on line after lambda body.", parser.src_of_rest()
+        ))
+      body
+    } else {
+      parser.&.is_done() or
+        return bad_input[ToastExpr](error(
+          "Additional garbage on line.", parser.src_of_rest()
+        ))
+      var children = bacon.children.to_toast_exprs()?
+      if children.is_empty() then
+        return bad_input[ToastExpr](error("Expected lambda body.", equals_src))
+      var body_src = children.first().src ... children.last().src
+      ToastExprKind.body(children) @ body_src
+    }
+
+  parsed(ToastExprKind.lambda(ToastLambda {
+    params = params.to_slice(),
+    body = body.put_on_heap(),
+  }) @ {backslash_src ... body.src})
 }
 fun parse_switch(
   bacon: Bacon, condition: ToastExpr
@@ -668,18 +771,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
   var parser = parser(bacon.line, bacon.src)
   var name = parser.&.parse_name() or return no_match[ToastFun]()
   var params = list[ToastParam]()
-  loop {
-    var name = parser.&.parse_name() or break
-    parser.&.consume(#:) or
-      return bad_input[ToastFun](error(
-        "Expected : after param {name.string}.", name.src
-      ))
-    var type = parser.&.parse_type_atom()? or
-      return bad_input[ToastFun](error(
-        "Expected type of param {name.string}", name.src
-      ))
-    params.&.push(ToastParam { name, type })
-  }
+  loop params.&.push(parser.&.parse_param()? or break)
   parser.&.consume("->") or
     return bad_input[ToastFun](error(
       "Expected ->", parser.src_of_rest()
@@ -714,6 +806,18 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
     }
 
   parsed(ToastFun { name, params = params.to_slice(), return_type, body })
+}
+fun parse_param(parser: &Parser): Result[Maybe[ToastParam], Error] {
+  var name = parser.parse_name() or return no_match[ToastParam]()
+  parser.consume(#:) or
+    return bad_input[ToastParam](error(
+      "Expected : after param {name.string}.", name.src
+    ))
+  var type = parser.&.parse_type_atom()? or
+    return bad_input[ToastParam](error(
+      "Expected type of param {name.string}", name.src
+    ))
+  parsed(ToastParam { name, type })
 }
 
 fun to_toast(bacon: Bacon): Result[Toast, Error] {

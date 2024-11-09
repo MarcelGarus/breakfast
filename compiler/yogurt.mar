@@ -6,7 +6,9 @@ struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: String }
 enum YogurtParam { runtime: PlumType, comptime: YogurtValue }
 
-struct YogurtFun { exprs: Slice[YogurtExpr], body: YogurtBody }
+struct YogurtFun {
+  exprs: Slice[YogurtExpr], captured: Maybe[Slice[YogurtId]], body: YogurtBody
+}
 struct YogurtId { int: Int }
 struct YogurtBody {
   params: Slice[YogurtId], exprs: Slice[YogurtId], returns: YogurtId
@@ -19,7 +21,11 @@ enum YogurtValueKind {
   string: String,
   struct_: Map[String, YogurtValue],
   tag: Tuple2[String, Slice[YogurtValue]],
+  lambda: YogurtLambdaValue,
   type: PlumType,
+}
+struct YogurtLambdaValue {
+  captures: Slice[YogurtValue], function: YogurtSignature
 }
 
 enum YogurtOp {
@@ -30,12 +36,16 @@ enum YogurtOp {
   member: YogurtMember,
   tag: YogurtTag,
   switch_: YogurtSwitch,
+  lambda: YogurtLambda,
+  lambda_call: YogurtLambdaCall,
   call: YogurtCall,
   instruction: YogurtInstruction,
 }
 struct YogurtMember { of: YogurtId, name: String }
 struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
 struct YogurtTag { symbol: String, args: Slice[YogurtId] }
+struct YogurtLambda { function: YogurtSignature, captures: Slice[YogurtId] }
+struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
 struct YogurtCall { receiver: YogurtSignature, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
@@ -108,6 +118,15 @@ fun write[W](
       writer.write(case_.value, fun_, indentation + 2)
     }
   }
+  case lambda(lambda) {
+    writer."lambda [capturing"
+    for capture in lambda.captures do writer." {capture}"
+    writer."] {lambda.function}"
+  }
+  case lambda_call(call) {
+    writer."call {call.lambda}"
+    for arg in call.args do writer." {arg}"
+  }
   case call(call) {
     writer."call \"{call.receiver}\""
     for arg in call.args do writer." {arg}"
@@ -130,6 +149,11 @@ fun write[W](writer: W, value: YogurtValue) {
     writer."({data.a}"
     for arg in data.b do writer." {arg}"
     writer.")"
+  }
+  case lambda(lambda) {
+    writer."\\ [capturing"
+    for captured in lambda.captures do writer." {captured}"
+    writer."] {lambda.function}"
   }
   case type(type) writer."{type}"
 }
@@ -284,6 +308,7 @@ fun to_yogurt(
   | based on the signature.
   yogurt.funs.&.put(signature, YogurtFun {
     exprs = empty_slice[YogurtExpr](),
+    captured = none[Slice[YogurtId]](),
     body = YogurtBody {
       params = empty_slice[YogurtId](),
       exprs = empty_slice[YogurtId](),
@@ -334,7 +359,11 @@ fun to_yogurt(
         }
       }
 
-      YogurtFun { exprs = builder.exprs.to_slice(), body }
+      YogurtFun {
+        exprs = builder.exprs.to_slice(),
+        captured = none[Slice[YogurtId]](),
+        body,
+      }
     }
     case builtin(builtin) builtin.to_yogurt(params, egg, yogurt)?
 
@@ -348,6 +377,7 @@ fun to_yogurt(
   body: EggBody, params: Slice[YogurtParam],
   builder: &YogurtFunBuilder, compiler: &YogurtCodeCompiler
 ): Result[YogurtBody, Error] {
+  eprintln("compiling body to yogurt. mapping: {compiler.egg_to_yogurt}")
   params.len == body.params.len or
     panic("body params len doesn't match the number of param types")
   var param_ids = list[YogurtId]()
@@ -520,6 +550,139 @@ fun to_yogurt(
           YogurtOp.switch_(YogurtSwitch { condition, cases }) $ common_type
         )
     }
+    case lambda(lambda) {
+      eprintln("compiling lambda {lambda.debug()}")
+      var lambda_builder = yogurt_fun_builder()
+      var lambda_compiler = YogurtCodeCompiler {
+        egg = compiler.egg, code = compiler.code, yogurt = compiler.yogurt,
+        egg_to_yogurt = map[EggId, YogurtId]()
+      }
+
+      | Figure out which variables the lambda captures (aka the closure) and
+      | look those up in the current scope. Add mappings for those to the lambda
+      | compiler.
+      var captured_egg_ids = expr.captured_variables(compiler.code)
+      eprintln("lambda captures {captured_egg_ids}")
+      var captured = list[YogurtId]()
+      var lambda_captures = list[YogurtId]()
+      for i in 0..captured_egg_ids.len do {
+        var egg_id = captured_egg_ids.get(i)
+        eprintln("looking up {egg_id}. mapping: {compiler.egg_to_yogurt}")
+        var yogurt_id = compiler.lookup(egg_id)
+        eprintln("  -> {yogurt_id}")
+
+        | From the point of view of creating a closure.
+        captured.&.push(yogurt_id)
+
+        | From the point of view of the closure.
+        var yogurt_id = lambda_builder.&.push(
+          YogurtOp.param $ builder.get(yogurt_id).type
+        )
+        lambda_captures.&.push(yogurt_id)
+        lambda_compiler.&.add_mapping(egg_id, yogurt_id)
+      }
+
+      | Compile the lambda body as a stand-alone function that takes the
+      | closure / captured variables as an explicit argument.
+      var params = list[YogurtParam]()
+      for param in lambda.params do
+        params.&.push(YogurtParam.runtime(param.type))
+      var lambda_body = lambda.body.to_yogurt(
+        params.to_slice(), lambda_builder.&, lambda_compiler.&
+      )?
+      var return_type = lambda_builder.get(lambda_body.returns).type
+
+      var function = yogurt_signature("some-lambda", empty_slice[YogurtParam]())
+      compiler.yogurt.funs.&.put(function, YogurtFun {
+        exprs = lambda_builder.exprs.to_slice(),
+        captured = some(lambda_captures.to_slice()),
+        body = lambda_body,
+      })
+
+      | Create a lambda that contains both the closure and the compiled function
+      | body.
+      var type = PlumType.lambda(LambdaType {
+        args = {
+          var param_types = list[PlumType]()
+          for param in lambda.params do param_types.&.push(param.type)
+          param_types.to_slice()
+        },
+        return_type = return_type.put_on_heap(),
+      })
+      var is_comptime = true
+      for capture in captured do
+        if not(builder.get(capture).op is comptime) then is_comptime = false
+      builder.push({
+        if is_comptime
+        then
+          YogurtOp.comptime(YogurtValueKind.lambda(YogurtLambdaValue {
+            captures = {
+              var captures = list[YogurtValue]()
+              for capture in captured do
+                captures.&.push(builder.get(capture).op.comptime.unwrap())
+              captures.to_slice()
+            },
+            function,
+          }) $ type)
+        else
+          YogurtOp.lambda(YogurtLambda {
+            function, captures = captured.to_slice(),
+          })
+      } $ type)
+    }
+    case lambda_call(call) {
+      var lambda = compiler.lookup(call.lambda)
+
+      var args = list[YogurtId]()
+      for arg in call.args do args.&.push(compiler.lookup(arg))
+      var args = args.to_slice()
+
+      | Make sure arg types match the lambda type.
+      var lambda_type = builder.get(lambda).type.lambda or
+        return error[YogurtId, Error](error(
+          "Called non-lambda ({builder.get(lambda).type})",
+          expr.src,
+        ))
+      for both in zip(args.iter(), lambda_type.args.iter()) do {
+        var actual_type   = builder.get(both.a).type
+        var expected_type = both.b
+        | TODO: relax?
+        actual_type == expected_type or
+          return error[YogurtId, Error](error(
+            "Lambda expects {expected_type}, got {actual_type})",
+            expr.src,
+          ))
+      }
+      var return_type = lambda_type.return_type.*
+
+      var are_all_args_comptime = true
+      for arg in args do
+        if not(builder.get(arg).op is comptime) then
+          are_all_args_comptime = false
+      var comptime_result = are_all_args_comptime
+
+      if comptime_result and false then {
+        | body.push(builder.push(YogurtOp.lambda_call(YogurtCall {
+        |   receiver = yogurt_signature(name.string, arg_params), args
+        | }) $ type))
+        | if compiled_fun.body.returns.int == -1 then {
+        |   return error[YogurtId, Error](error(
+        |     "A function with only comptime known arguments calls itself with those same arguments. 
+        |     'We can't run this at comptime.",
+        |     expr.src,
+        |   ))
+        | }
+        | var returned_expr = compiled_fun.get(compiled_fun.body.returns)
+        | var value = returned_expr.op.comptime
+        |   .unwrap("value should be comptime known,but it's {returned_expr.op.debug()}")
+        | builder.push(YogurtOp.comptime(value) $ type)
+        todo()
+      } else {
+        builder.push(
+          YogurtOp.lambda_call(YogurtLambdaCall { lambda, args }) $ return_type
+        )
+      }
+    }
     case call(call) {
       var name = call.receiver
       var args = list[YogurtId]()
@@ -551,9 +714,9 @@ fun to_yogurt(
       var comptime_result = are_all_args_comptime or name.string == "builtin_type_of"
 
       if comptime_result then {
-        body.push(builder.push(YogurtOp.call(YogurtCall {
+        var call_id = builder.push(YogurtOp.call(YogurtCall {
           receiver = yogurt_signature(name.string, arg_params), args
-        }) $ type))
+        }) $ type)
         if compiled_fun.body.returns.int == -1 then {
           return error[YogurtId, Error](error(
             "A function with only comptime known arguments calls itself with those same arguments. 
@@ -562,9 +725,15 @@ fun to_yogurt(
           ))
         }
         var returned_expr = compiled_fun.get(compiled_fun.body.returns)
-        var value = returned_expr.op.comptime
-          .unwrap("value should be comptime known,but it's {returned_expr.op.debug()}")
-        builder.push(YogurtOp.comptime(value) $ type)
+        switch returned_expr.op.comptime
+        case some(value) {
+          body.push(call_id)
+          builder.push(YogurtOp.comptime(value) $ type)
+        }
+        case none {
+          eprintln("Return value of {call.receiver.string} should be comptime known,but it's {returned_expr.op.debug()}")
+          call_id
+        }
       } else {
         builder.push(
           YogurtOp.call(YogurtCall {
@@ -607,6 +776,59 @@ fun to_yogurt(
   ok[YogurtId, Error](id)
 }
 
+
+fun captured_variables(expr: EggExpr, code: EggCode): Slice[EggId] {
+  var ignore = set[EggId]()
+  var captured = list[EggId]()
+  expr.collect_captured(ignore.&, captured.&, code)
+  captured.to_slice()
+}
+fun collect_captured(id: EggId, ignore: &Set[EggId], captured: &List[EggId]) {
+  if not(ignore.contains(id)) then {
+    captured.push(id)
+    ignore.put(id)
+  }
+}
+fun collect_captured(
+  body: EggBody, ignore: &Set[EggId], captured: &List[EggId], code: EggCode
+) {
+  eprintln("collecting captured from body")
+  for param in body.params do ignore.put(param)
+  for id in body.exprs do {
+    code.get(id).collect_captured(ignore, captured, code)
+    ignore.put(id)
+  }
+}
+fun collect_captured(
+  expr: EggExpr, ignore: &Set[EggId], captured: &List[EggId], code: EggCode
+) {
+  eprintln("collecting captured variables from {expr.src}")
+
+  switch expr.kind
+  case param unreachable()
+  case int {}
+  case string {}
+  case struct_(struct_)
+    for field in struct_ do field.value.collect_captured(ignore, captured)
+  case member(member) member.of.collect_captured(ignore, captured)
+  case symbol {}
+  case tag(tag)
+    for arg in tag.args do arg.collect_captured(ignore, captured)
+  case switch_(switch_) {
+    switch_.condition.collect_captured(ignore, captured)
+    for case_ in switch_.cases do
+      case_.value.collect_captured(ignore, captured, code)
+  }
+  case lambda(lambda) lambda.body.collect_captured(ignore, captured, code)
+  case lambda_call(call) {
+    call.lambda.collect_captured(ignore, captured)
+    for arg in call.args do arg.collect_captured(ignore, captured)
+  }
+  case call(call)
+    for arg in call.args do arg.collect_captured(ignore, captured)
+}
+
+
 struct YogurtBodyBuilder { parent: &YogurtFunBuilder, body: List[YogurtId] }
 fun push(body: &YogurtBodyBuilder, expr: YogurtExpr): YogurtId {
   var id = body.parent.&.push(expr)
@@ -633,6 +855,7 @@ fun to_yogurt(
     return error[YogurtFun, Error](error(error, invalid_src()))
   var fun_ = YogurtFun {
     exprs = fun_builder.exprs.to_slice(),
+    captured = none[Slice[YogurtId]](),
     body = YogurtBody { params, exprs = body.body.to_slice(), returns }
   }
 
@@ -823,6 +1046,7 @@ fun to_yogurt(
               }
               variants.to_slice()
             }, type_variant)).to_slice())) $ type_type_info
+          case lambda todo()
           case recursive unreachable()
         ) $ type_type_info
       )
@@ -857,6 +1081,7 @@ fun comptime_cast(value: YogurtValue, type: PlumType): YogurtValue {
       args.to_slice()
     })) $ type
   }
+  case lambda todo()
   case type value
 }
 
@@ -873,6 +1098,7 @@ fun compile_cast_fun(
   | based on the signature.
   yogurt.funs.&.put(signature, YogurtFun {
     exprs = empty_slice[YogurtExpr](),
+    captured = none[Slice[YogurtId]](),
     body = YogurtBody {
       params = empty_slice[YogurtId](),
       exprs = empty_slice[YogurtId](),
@@ -889,6 +1115,7 @@ fun compile_cast_fun(
   var returns = yogurt.compile_cast_fun_body(from, to, body.&, param)
   var fun_ = YogurtFun {
     exprs = fun_builder.exprs.to_slice(),
+    captured = none[Slice[YogurtId]](),
     body = YogurtBody { params, exprs = body.body.to_slice(), returns }
   }
 

@@ -13,10 +13,13 @@ enum Object {
   string: String,
   struct_: Map[String, ObjectId],
   tag: TagObject,
+  lambda: LambdaObject,
   code: CodeObject, | code from one compilation unit
 }
 struct TagObject { symbol: String, args: Slice[ObjectId] }
+struct LambdaObject { code: ObjectId, fun_: FunId, captured: Slice[ObjectId] }
 struct CodeObject { funs: List[FunCode] }
+
 struct FunId { int: Int } | index in a code's functions list
 struct FunCode { name: String, instructions: Slice[ByteCodeInstruction] }
 enum ByteCodeInstruction {
@@ -29,6 +32,8 @@ enum ByteCodeInstruction {
   member: String, | pops a struct, pushes its member with the given name
   tag: Tuple2[String, Int], | symbol and number of arguments
   untag, | consumes a tag, pushes all its args on the stack
+  lambda: Tuple2[FunId, Int], | function and number of captured variables. consumes num captured, pushes a lambda
+  lambda_call: Int, | contains num args. pops a lambda from the stack, pops args. pushes captured, args. calls to function start
   call: FunId, | calls another function from the same compilation unit
   add_ints,
   sub_ints,
@@ -77,6 +82,11 @@ fun write[W](writer: W, object: Object) {
     for arg in tag.args do writer." {arg}"
     writer.")"
   }
+  case lambda(lambda) {
+    writer."\\ {lambda.code} {lambda.fun_} [capturing"
+    for capture in lambda.captured do writer." {capture}"
+    writer."]"
+  }
   case code(code) writer."{code}"
 }
 fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
@@ -98,6 +108,11 @@ fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
       writer.write_deep(arg, universe)
     }
     writer.")"
+  }
+  case lambda(lambda) {
+    writer."\\ {lambda.code} {lambda.fun_} [capturing"
+    for capture in lambda.captured do writer." {capture}"
+    writer."]"
   }
   case code(code) writer."{code}"
 }
@@ -127,6 +142,8 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
   case member(name) writer."get member {name}"
   case tag(tag) writer."tag {tag.a} with {tag.b} args"
   case untag writer."untag"
+  case lambda(lambda) writer."lambda {lambda.a} with {lambda.b} captured"
+  case lambda_call writer."lambda_call"
   case call(function) writer."call {function}"
   case add_ints writer."add_ints"
   case sub_ints writer."sub_ints"
@@ -144,6 +161,8 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
 struct MainFun { code: ObjectId, id: FunId }
 
 fun compile(yogurt: Yogurt, universe: &Universe): MainFun {
+  var code = universe.new(Object.int(-1)) | placeholder
+
   var signature_to_id = map[YogurtSignature, FunId]()
   for fun_ in yogurt.funs.iter().enumerate() do
     signature_to_id.&.put(fun_.item.key, FunId { int = fun_.index }) | placeholders
@@ -153,10 +172,10 @@ fun compile(yogurt: Yogurt, universe: &Universe): MainFun {
     var signature = fun_.key
     var fun_ = fun_.value
     var id = signature_to_id.get(signature)
-    funs.&.get_ref(id.int).* = fun_.compile(signature, universe, signature_to_id)
+    funs.&.get_ref(id.int).* = fun_.compile(signature, code, universe, signature_to_id)
   }
 
-  var code = universe.new(Object.code(CodeObject { funs }))
+  universe.objects.get_ref(code.int).* = Object.code(CodeObject { funs })
 
   MainFun {
     code,
@@ -168,15 +187,19 @@ fun compile(yogurt: Yogurt, universe: &Universe): MainFun {
 }
 fun compile(
   fun_: YogurtFun, signature: YogurtSignature,
-  universe: &Universe, signature_to_id: Map[YogurtSignature, FunId]
+  code: ObjectId, universe: &Universe, signature_to_id: Map[YogurtSignature, FunId]
 ): FunCode {
   var stack_model = list[YogurtId]()
+  if fun_.captured is some(captured) then
+    for capture in captured do stack_model.&.push(capture)
   for param in fun_.body.params do stack_model.&.push(param)
   var instructions = list[ByteCodeInstruction]()
 
   fun_.body.compile(
-    instructions.&, stack_model.&, fun_, universe, signature_to_id
+    instructions.&, stack_model.&, fun_, code, universe, signature_to_id
   )
+  if fun_.captured is some(captured) then
+    instructions.&.push(ByteCodeInstruction.pop_n_below_top(captured.len))
 
   FunCode { name = signature.str, instructions = instructions.to_slice() }
 }
@@ -185,6 +208,7 @@ fun compile(
   instructions: &List[ByteCodeInstruction],
   stack_model: &List[YogurtId],
   fun_: YogurtFun,
+  code: ObjectId,
   universe: &Universe,
   signature_to_id: Map[YogurtSignature, FunId],
 ) {
@@ -194,7 +218,9 @@ fun compile(
     case param panic("param should not exist in body")
     case uninitialized {}
     case comptime(value)
-      instructions.push(ByteCodeInstruction.push_object(value.to_object(universe)))
+      instructions.push(ByteCodeInstruction.push_object(
+        value.to_object(universe, code, signature_to_id)
+      ))
     case struct_(struct_) {
       var fields = list[String]()
       for field in struct_ do fields.&.push(field.key)
@@ -241,7 +267,7 @@ fun compile(
         var stack_len_before = stack_model.len
         instructions.push(ByteCodeInstruction.untag)
         for param in case_.value.params do stack_model.push(param)
-        case_.value.compile(instructions, stack_model, fun_, universe, signature_to_id)
+        case_.value.compile(instructions, stack_model, fun_, code, universe, signature_to_id)
         stack_model.pop().ignore()
         var stack_len_after = stack_model.len
         stack_len_before == stack_len_after or panic("stack len mismatch ({stack_len_before} and {stack_len_after})")
@@ -253,6 +279,31 @@ fun compile(
       for jump in end_jumps do
         instructions.get_ref(jump).* = ByteCodeInstruction.jump(end)
       instructions.get_ref(jump_table_index).* = ByteCodeInstruction.jump_table(table)
+    }
+    case lambda(lambda) {
+      for capture in lambda.captures do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(capture)
+        ))
+        stack_model.push(capture)
+      }
+      var fun_ = signature_to_id.get(lambda.function)
+      instructions.push(ByteCodeInstruction.lambda(tuple(fun_, lambda.captures.len)))
+      stack_model.pop(lambda.captures.len)
+    }
+    case lambda_call(call) {
+      for arg in call.args do {
+        instructions.push(ByteCodeInstruction.push_from_stack(
+          stack_model.find_distance_from_top(arg)
+        ))
+        stack_model.push(arg)
+      }
+      instructions.push(ByteCodeInstruction.push_from_stack(
+        stack_model.find_distance_from_top(call.lambda)
+      ))
+      stack_model.push(call.lambda)
+      instructions.push(ByteCodeInstruction.lambda_call(call.args.len))
+      stack_model.pop(call.args.len + 1)
     }
     case call(call) {
       for arg in call.args do {
@@ -304,20 +355,32 @@ fun find_distance_from_top(stack_model: List[YogurtId], id: YogurtId): Int {
     if entry.item == id then return entry.index
   panic("{id} not on stack {stack_model}")
 }
-fun to_object(value: YogurtValue, universe: &Universe): ObjectId {
+fun to_object(
+  value: YogurtValue, universe: &Universe, code: ObjectId,
+  signature_to_id: Map[YogurtSignature, FunId],
+): ObjectId {
   switch value.kind
   case int(int) universe.new(Object.int(int))
   case string(string) universe.new(Object.string(string))
   case struct_(struct_) {
     var fields = map[String, ObjectId]()
     for field in struct_ do
-      fields.&.put(field.key, field.value.to_object(universe))
+      fields.&.put(field.key, field.value.to_object(universe, code, signature_to_id))
     universe.new(Object.struct_(fields))
   }
   case tag(tag) {
     var args = list[ObjectId]()
-    for arg in tag.b do args.&.push(arg.to_object(universe))
+    for arg in tag.b do args.&.push(arg.to_object(universe, code, signature_to_id))
     universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
+  }
+  case lambda(lambda) {
+    var captured = list[ObjectId]()
+    for capture in lambda.captures do
+      captured.&.push(capture.to_object(universe, code, signature_to_id))
+    universe.new(Object.lambda(LambdaObject {
+      code, fun_ = signature_to_id.get(lambda.function),
+      captured = captured.to_slice()
+    }))
   }
   case type(type) universe.new(Object.string("{type}"))
 }

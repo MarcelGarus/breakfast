@@ -35,13 +35,17 @@ enum EggExprKind {
   struct_: Map[String, EggId],
   member: EggMember,
   symbol: String,
-  switch_: EggSwitch,
   tag: EggTag,
+  switch_: EggSwitch,
+  lambda: EggLambda,
+  lambda_call: EggLambdaCall,
   call: EggCall,
 }
 struct EggMember { of: EggId, name: String }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggTag { symbol: String, args: Slice[EggId] }
+struct EggLambda { params: Slice[EggParam], body: EggBody }
+struct EggLambdaCall { lambda: EggId, args: Slice[EggId] }
 struct EggCall { receiver: StringAndSrc, args: Slice[EggId] }
 
 fun /(name: String, type: PlumType): EggParam { EggParam { name, type } }
@@ -96,6 +100,10 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   }
   case member(member) writer."{member.of}.{member.name}"
   case symbol(symbol) writer."symbol {symbol}"
+  case tag(tag) {
+    writer."tag {tag.symbol}"
+    for arg in tag.args do writer." {arg}"
+  }
   case switch_(switch_) {
     writer."switch {switch_.condition}"
     for case_ in switch_.cases do {
@@ -105,13 +113,19 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
       writer.write(case_.value, code, indentation + 2)
     }
   }
+  case lambda(lambda) {
+    writer."lambda"
+    for param in lambda.params do writer." {param}"
+    writer." ="
+    writer.write(lambda.body, code, indentation + 1)
+  }
+  case lambda_call(call) {
+    writer."call {call.lambda}"
+    for arg in call.args do writer." {arg}"
+  }
   case call(call) {
     writer."call {call.receiver.string}"
     for arg in call.args do writer." {arg}"
-  }
-  case tag(tag) {
-    writer."tag {tag.symbol}"
-    for arg in tag.args do writer." {arg}"
   }
 }
 
@@ -178,7 +192,7 @@ fun to_egg(toast: Toast): Result[Egg, Error] {
         return_type = fun_.return_type.to_egg(toast)?,
         impl = EggFunImpl.code({
           var visible = visible()
-          var compiler = egg_code_compiler().&
+          var compiler = egg_code_compiler(toast).&
           var body = compiler.egg_body_compiler().&
 
           for param in fun_.params do
@@ -285,6 +299,16 @@ fun to_egg(
     }
     ok[PlumType, Error](PlumType.enum_(variants))
   }
+  case lambda(lambda) {
+    var args = list[PlumType]()
+    for arg in lambda.args do
+      args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1)?)
+    ok[PlumType, Error](PlumType.lambda(LambdaType {
+      args = args.to_slice(),
+      return_type = lambda.return_type
+        .to_egg(toast, env, parent_calls, depth + 1)?.put_on_heap(),
+    }))
+  }
 }
 
 fun create_builtin_fun(builtin: Builtin): EggFun {
@@ -297,11 +321,13 @@ fun create_builtin_fun(builtin: Builtin): EggFun {
   }
 }
 
-struct EggCodeCompiler { exprs: List[EggExpr] }
+struct EggCodeCompiler { toast: Toast, exprs: List[EggExpr] }
 struct EggBodyCompiler {
   parent: &EggCodeCompiler, params: List[EggId], exprs: List[EggId]
 }
-fun egg_code_compiler(): _ { EggCodeCompiler { exprs = list[EggExpr]() } }
+fun egg_code_compiler(toast: Toast): _ {
+  EggCodeCompiler { toast, exprs = list[EggExpr]() }
+}
 fun egg_body_compiler(parent: &EggCodeCompiler): _ {
   EggBodyCompiler { parent, params = list[EggId](), exprs = list[EggId]() }
 }
@@ -364,17 +390,43 @@ fun to_egg(
         return error[EggId, Error](error(
           "Unknown referenced name {name}.", toast.src
         ))
+    case lambda(lambda) {
+      var snapshot = visible.snapshot()
+      var lambda_body = body.parent.egg_body_compiler().&
+      for param in lambda.params do
+        visible.define(param.name.string, lambda_body.push_param(param.name.src))
+      var returns = lambda.body.to_egg(lambda_body, visible)?
+      var lambda_body = lambda_body.finish(returns)
+      visible.restore(snapshot)
+
+      body.push(EggExprKind.lambda(EggLambda {
+        params = {
+          var params = list[EggParam]()
+          for param in lambda.params do
+            params.&.push(param.name.string / param.type.to_egg(body.parent.toast)?)
+          params.to_slice()
+        },
+        body = lambda_body,
+      }) @ toast.src)
+    }
     case call(call) {
       var args = list[EggId]()
       for arg in call.args do args.&.push(arg.to_egg(body, visible)?)
       var args = args.to_slice()
 
-      switch call.receiver.kind
-      case name(receiver) body.push(EggExprKind.call(EggCall { receiver = receiver @ toast.src, args }) @ toast.src)
-      case symbol(symbol) body.push(EggExprKind.tag(EggTag { symbol, args }) @ toast.src)
-      default return error[EggId, Error](error(
-        "You can only call names.", call.receiver.src
-      ))
+      body.push({
+        switch call.receiver.kind
+        case name(name) {
+          switch visible.lookup(name)
+          case some(lambda) EggExprKind.lambda_call(EggLambdaCall { lambda, args })
+          case none EggExprKind.call(EggCall { receiver = name @ toast.src, args })
+        }
+        case symbol(symbol) EggExprKind.tag(EggTag { symbol, args })
+        default {
+          var lambda = call.receiver.to_egg(body, visible)?
+          EggExprKind.lambda_call(EggLambdaCall { lambda, args })
+        }
+      } @ toast.src)
     }
     case var_(var_) {
       var value = var_.value.to_egg(body, visible)?
