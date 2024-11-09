@@ -432,8 +432,12 @@ fun to_egg(
       } @ call.receiver.src())
     }
     case var_(var_) {
-      var value = var_.value.to_egg(body, visible)?
-      visible.define(var_.name.string, value)
+      var name = var_.left.name or return error[EggId, Error](error(
+        "Variables have to be lowercase.", var_.equal_sign.src
+      ))
+
+      var value = var_.right.to_egg(body, visible)?
+      visible.define(name.string, value)
       value
     }
     case body(exprs) {
