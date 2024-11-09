@@ -509,8 +509,8 @@ fun to_yogurt(
       }
 
       | Find the common type of all branches.
-      var common_type = join(case_types.to_slice())
-        or return error[YogurtId, Error](error("Couldn't join types {case_types}", expr.src))
+      var common_type = union(case_types.to_slice())
+        or return error[YogurtId, Error](error("Couldn't union types {case_types}", expr.src))
 
       | Add cast expressions where necessary.
       for case_ in cases do {

@@ -567,11 +567,12 @@ fun is_equivalent_logic(
 }
 
 
-| Joining types  
-| When multiple branches evaluate to different types, those need to be joined to
-| get the overall result type. In that case, we need to make sure that all types
-| "line up" -- for example, you can't have one branch evaluate to an Int and
-| another one to a String. This process of joining types is implemented here.
+| Unioning types  
+| When multiple branches evaluate to different types, those need to be unioned
+| to get the overall result type. In that case, we need to make sure that all
+| types "line up" -- for example, you can't have one branch evaluate to an Int
+| and another one to a String. This process of unioning types is implemented
+| here.
 |
 | A more complex example:
 |
@@ -581,7 +582,7 @@ fun is_equivalent_logic(
 | Second =
 |   | A ^1
 |     C ^C
-| Joined =
+| Unioned =
 |   | A ^1
 |     B
 |       | A ^1
@@ -590,40 +591,40 @@ fun is_equivalent_logic(
 |       | A ^1
 |         C ^1
 |
-| Here, we have two enum types that are joined. The resulting type contains a
+| Here, we have two enum types that are unioned. The resulting type contains a
 | recursive A variant. As soon as either B or C occur, we know from which
 | original type this value stems, so we have a more precise type for the
 | contained payload.
-fun join(types: Slice[PlumType]): Maybe[PlumType] {
+fun union(types: Slice[PlumType]): Maybe[PlumType] {
   var common = types.get(0)
   for type in types.without_first() do
-    common = join(common, type) or return none[PlumType]()
+    common = union(common, type) or return none[PlumType]()
   some(common)
 }
-fun join(a: PlumType, b: PlumType): Maybe[PlumType] {
-  join(a, b, list[Tuple2[PlumType, PlumType]]().&)
+fun union(a: PlumType, b: PlumType): Maybe[PlumType] {
+  union(a, b, list[Tuple2[PlumType, PlumType]]().&)
 }
-fun join(
+fun union(
   a: PlumType, b: PlumType,
-  currently_joining: &List[Tuple2[PlumType, PlumType]],
+  currently_unioning: &List[Tuple2[PlumType, PlumType]],
 ): Maybe[PlumType] {
-  if currently_joining.iter().&.find(tuple(a, b)) is some(index) then {
-    var level = currently_joining.len - index
+  if currently_unioning.iter().&.find(tuple(a, b)) is some(index) then {
+    var level = currently_unioning.len - index
     return some(PlumType.recursive(level))
   }
 
-  currently_joining.push(tuple(a, b))
+  currently_unioning.push(tuple(a, b))
 
   a = a.extend_one_level()
   b = b.extend_one_level()
-  var result = join_logic(a, b, currently_joining)
+  var result = union_logic(a, b, currently_unioning)
 
-  currently_joining.pop()
+  currently_unioning.pop()
   result
 }
-fun join_logic(
+fun union_logic(
   a: PlumType, b: PlumType,
-  currently_joining: &List[Tuple2[PlumType, PlumType]],
+  currently_unioning: &List[Tuple2[PlumType, PlumType]],
 ): Maybe[PlumType] {
   if a is never then return some(b)
   if b is never then return some(a)
@@ -644,7 +645,7 @@ fun join_logic(
       var a_type = a_field.value
       var b_type = b_fields.get_maybe(key) or return none[PlumType]()
       fields.&.put(key,
-        join(a_type, b_type, currently_joining) or return none[PlumType]())
+        union(a_type, b_type, currently_unioning) or return none[PlumType]())
     }
     some(PlumType.struct_(fields))
   }
@@ -660,7 +661,7 @@ fun join_logic(
           a_args.len == b_args.len or return none[PlumType]()
           var args = list[PlumType]()
           for both in zip(a_args.iter(), b_args.iter()) do
-            args.&.push(join(both.a, both.b, currently_joining) or
+            args.&.push(union(both.a, both.b, currently_unioning) or
               return none[PlumType]())
           args.to_slice()
         } else b_args
@@ -689,5 +690,5 @@ fun join_logic(
 | to another type if all values of the first type are also values of the second
 | type.
 fun is_assignable_to(from: PlumType, to: PlumType): Bool {
-  {join(from, to) or return false} =~= to
+  {union(from, to) or return false} =~= to
 }
