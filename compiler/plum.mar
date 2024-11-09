@@ -1,5 +1,6 @@
 import ../../martinaise/stdlib.mar
 import error.mar
+import formatting.mar
 import type.mar
 import builtins.mar
 import bacon.mar

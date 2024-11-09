@@ -3,8 +3,7 @@
 | should roughly correspond to the content of Plum files.
 | TODO: In the long term, we should move the Toast closer to the original source
 | code – for example, by representing pipes and calls differently. This then
-| allows us to use the Toast for formatting. Then, we should be able to not save
-| the Src in every tree node, but only in the leaves.
+| allows us to use the Toast for formatting.
 
 import plum.mar
 
@@ -17,13 +16,13 @@ struct ToastTypeDef {
 enum ToastType {
   variable: StringAndSrc,
   call: ToastTypeCall,
-  struct_: List[ToastTypeField],
-  enum_: List[ToastTypeCase],
+  struct_: Slice[ToastTypeField],
+  enum_: Slice[ToastTypeVariant],
   lambda: ToastTypeLambda,
 }
 struct ToastTypeCall { name: StringAndSrc, args: Slice[ToastType] }
 struct ToastTypeField { name: StringAndSrc, type: ToastType }
-struct ToastTypeCase { name: StringAndSrc, args: Slice[ToastType] }
+struct ToastTypeVariant { name: StringAndSrc, args: Slice[ToastType] }
 struct ToastTypeLambda { args: Slice[ToastType], return_type: &ToastType }
 
 struct ToastFun {
@@ -33,31 +32,38 @@ struct ToastFun {
   body: ToastExpr,
 }
 struct ToastParam { name: StringAndSrc, type: ToastType }
-struct ToastExpr { kind: ToastExprKind, src: Src }
-enum ToastExprKind {
-  int: Int,
-  string: String,
-  struct_: Slice[ToastField],
+enum ToastExpr {
+  int: IntAndSrc,
+  string: StringAndSrc,
+  struct_: ToastStruct,
   member: ToastMember,
-  symbol: String,
+  symbol: StringAndSrc,
   switch_: ToastSwitch,
-  name: String,
+  name: StringAndSrc,
   lambda: ToastLambda,
   call: ToastCall,
   var_: ToastVar,
   body: Slice[ToastExpr],
 }
+struct ToastStruct { ampersand: StringAndSrc, fields: Slice[ToastField] }
 struct ToastField { name: StringAndSrc, value: ToastExpr }
 struct ToastMember { of: &ToastExpr, name: StringAndSrc }
-struct ToastSwitch { condition: &ToastExpr, cases: Slice[ToastCase] }
-struct ToastCase { symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr }
-struct ToastLambda { params: Slice[ToastParam], body: &ToastExpr }
+struct ToastSwitch {
+  condition: &ToastExpr, percent: StringAndSrc, cases: Slice[ToastCase]
+}
+struct ToastCase {
+  symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr
+}
+struct ToastLambda {
+  backslash: StringAndSrc, params: Slice[ToastParam], body: &ToastExpr
+}
 struct ToastCall { receiver: &ToastExpr, args: Slice[ToastExpr] }
-struct ToastVar { name: String, value: &ToastExpr }
+struct ToastVar { name: StringAndSrc, value: &ToastExpr }
 
+struct IntAndSrc { int: Int, src: Src }
 struct StringAndSrc { string: String, src: Src }
 
-fun @(kind: ToastExprKind, src: Src): ToastExpr { ToastExpr { kind, src } }
+fun @(int: Int, src: Src): _ { IntAndSrc { int, src } }
 fun @(string: String, src: Src): _ { StringAndSrc { string, src } }
 
 fun write[W](writer: W, toast: Toast) {
@@ -74,8 +80,7 @@ fun write[W](writer: W, toast: Toast) {
     case fun_(def) {
       writer."{def.name.string}"
       for param in def.params do writer." {param.name.string}: {param.type}"
-      writer." -> {def.return_type}"
-      writer." =\n"
+      writer." -> {def.return_type} =\n"
       writer.write(def.body, 1)
     }
   }
@@ -84,83 +89,117 @@ fun write[W](writer: W, type: ToastType) {
   switch type
   case variable(variable) writer."{variable.string}"
   case call(call) {
-    writer."({call.name.string}"
+    writer."{call.name.string}"
     for arg in call.args do writer." {arg}"
-    writer.")"
   }
   case struct_(fields) {
     writer."&"
-    for field in fields do writer." {field.name.string}: {field.type}"
+    for field in fields do
+      writer." {field.name.string}: {field.type.without_whitespace()}"
   }
   case enum_(variants) {
     writer."|"
     for variant in variants do {
-      writer." ({variant.name.string}"
-      for arg in variant.args do writer." {arg}"
-      writer.")"
+      writer." "
+      if variant.args.is_not_empty() then writer."("
+      writer."{variant.name.string}"
+      for arg in variant.args do writer." {arg.without_whitespace()}"
+      if variant.args.is_not_empty() then writer.")"
     }
   }
   case lambda(lambda) {
-    writer."(\\"
-    for arg in lambda.args do writer." {arg}"
-    writer." -> {lambda.return_type})"
+    writer."\\"
+    for arg in lambda.args do writer." {arg.without_whitespace()}"
+    writer." -> {lambda.return_type.without_whitespace()}"
   }
 }
-fun write[W](writer: W, body: Slice[ToastExpr], indentation: Int) {
+fun write[W](writer: W, type: FormatWithoutWhitespace[ToastType]) {
+  switch type.value
+  case variable(variable) writer."{variable}"
+  case call(call) writer."({call})"
+  case struct_(struct_) writer."({struct_})"
+  case enum_(enum_) writer."({enum_})"
+  case lambda(lambda) writer."({lambda})"
+}
+fun write[W](writer: W, body: Slice[ToastExpr], indentation: Indentation) {
   var first = true
   for expr in body do {
     if first then first = false else writer."\n"
     writer.write(expr, indentation)
   }
 }
-fun write[W](writer: W, expr: ToastExpr, indentation: Int) {
-  if not(expr.kind is body) then
-    for i in 0..indentation do writer."  "
+fun write[W](writer: W, expr: ToastExpr, indentation: Indentation) {
   switch expr.kind
-  case int(int) writer."{int} @ {expr.src}"
-  case string(str) writer."\"{str}\""
-  case struct_(fields) {
+  case int(int) writer."{indentation}{int.int}"
+  case string(string) writer."{indentation}{string.string.debug()}"
+  case struct_(struct_) {
     var is_first = true
-    for field in fields do {
-      writer."{if is_first then "& " else "  "}{field.name.string}: \n"
+    for field in struct_ do {
+      writer."{indentation}{if is_first then "& " else "  "}{field.name.string}:\n"
       writer.write(field.value, indentation + 2)
       is_first = false
     }
-    if fields.is_empty() then writer."&"
+    if struct_.is_empty() then writer."{indentation}&"
   }
   case member(member) {
-    writer."member {member.name.string}"
-    writer.write(member.of.*, indentation + 1)
+    writer.write(member.of.*, indentation)
+    writer."\n{indentation}.{member.name.string}"
   }
-  case symbol(symbol) writer."{symbol}"
+  case symbol(symbol) writer."{symbol.string}"
   case switch_(switch_) {
-    writer."%\n"
-    writer.write(switch_.condition.*, indentation + 1)
+    writer.write(switch_.condition.*, indentation)
+    var is_first = true
     for case_ in switch_.cases do {
-      writer."\n"
-      for i in 0..indentation do writer."  "
-      writer."  {case_.symbol.string}:\n"
+      writer."\n{indentation}{if is_first then "% " else "  "}
+        '{case_.symbol.string}:\n"
       writer.write(case_.body, indentation + 2)
+      is_first = false
     }
   }
-  case name(name) writer."{name}"
+  case name(name) writer."{indentation}{name.string}"
   case lambda(lambda) {
-    writer."\\"
-    for param in lambda.params do writer." {param.name.string}: {param.type}"
+    writer."{indentation}\\"
+    for param in lambda.params do writer." {param}"
     writer." =\n"
     writer.write(lambda.body.*, indentation + 1)
   }
   case call(call) {
-    writer."call\n"
-    writer.write(call.receiver.*, indentation + 1)
+    writer.write(call.receiver.*, indentation)
     writer."\n"
     writer.write(call.args, indentation + 1)
   }
   case var_(var_) {
-    writer."var {var_.name} =\n"
+    writer."{indentation}{var_.name} =\n"
     writer.write(var_.value.*, indentation + 1)
   }
   case body(body) writer.write(body, indentation)
+}
+
+fun src(expr: ToastExpr): Src {
+  switch expr
+  case int(int) int.src
+  case string(string) string.src
+  case struct_(struct_) {
+    struct_.ampersand.src ...
+      if struct_.fields.last_maybe() is some(field) then
+        field.value.src()
+      else
+        struct_.ampersand.src
+  }
+  case member(member) member.of.src() ... member.name.src
+  case symbol(symbol) symbol.src
+  case switch_(switch_) {
+    switch_.percent.src ...
+      if switch_.cases.last_maybe() is some(case_) then
+        case_.body.src()
+      else
+        switch_.percent.src
+  }
+  case name(name) name.src
+  case lambda(lambda) lambda.backslash.src ... lambda.body.src()
+  case call(call) call.receiver.src() ... call.args.last().src()
+  case var_(var_) var_.name.src ... var_.value.src()
+  case body(body) body.first().src() ... body.last().src()
 }
 
 | In this file, parsing refers to converting a single line of code into
@@ -221,19 +260,6 @@ fun consume(parser: &Parser, prefix: String): Maybe[Src] {
     parser.input_src.with_range({parser.input_src.range.start + start} ..+ 1)
   )
 }
-fun parse_int(parser: &Parser): Maybe[Int] {
-  parser.consume_whitespace()
-  var num = 0
-  var start = parser.cursor
-  loop {
-    var char = parser.current()
-    char.is_digit() or break
-    num = num * 10 + {char - #0}.to_int()
-    parser.advance()
-  }
-  if start == parser.cursor then return none[Int]()
-  some(num)
-}
 
 fun no_match[T](): Result[Maybe[T], Error] {
   ok[Maybe[T], Error](none[T]())
@@ -245,12 +271,27 @@ fun parsed[T](value: T): Result[Maybe[T], Error] {
   ok[Maybe[T], Error](some(value))
 }
 
-fun parse_string(parser: &Parser): Result[Maybe[String], Error] {
-  parser.consume(#") or return no_match[String]()
+fun parse_int(parser: &Parser): Maybe[IntAndSrc] {
+  parser.consume_whitespace()
+  var num = 0
+  var start = parser.cursor
+  loop {
+    var char = parser.current()
+    char.is_digit() or break
+    num = num * 10 + {char - #0}.to_int()
+    parser.advance()
+  }
+  var end = parser.cursor
+  if start == end then return none[IntAndSrc]()
+  some(num @ parser.src_of(start..end))
+}
+fun parse_string(parser: &Parser): Result[Maybe[StringAndSrc], Error] {
+  var start_including_quote = parser.cursor
+  parser.consume(#") or return no_match[StringAndSrc]()
   var start = parser.cursor
   loop {
     if parser.is_at_end() then
-      return bad_input[String](error(
+      return bad_input[StringAndSrc](error(
         "string doesn't end until end of input", parser.src_of_rest()
       ))
     if parser.current() == #" then break
@@ -258,7 +299,11 @@ fun parse_string(parser: &Parser): Result[Maybe[String], Error] {
   }
   var end = parser.cursor
   parser.advance() | consume the "
-  parsed(parser.input.substr(start..end))
+  var end_including_quote = parser.cursor
+  parsed(
+    parser.input.substr(start..end)
+      @ parser.src_of(start_including_quote..end_including_quote)
+  )
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/<>"
 fun parse_identifier(parser: &Parser): Maybe[StringAndSrc] {
@@ -302,14 +347,10 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
           parser.src_of_rest()
         ))
       expr
-    } else if parser.parse_int() is some(int) then
-      ToastExprKind.int(int) @ parser.src_from_until_cursor(start)
-    else if parser.parse_string()? is some(str) then
-      ToastExprKind.string(str) @ parser.src_from_until_cursor(start)
-    else if parser.parse_name() is some(name) then
-      ToastExprKind.name(name.string) @ name.src
-    else if parser.parse_symbol() is some(symbol) then
-      ToastExprKind.symbol(symbol.string) @ symbol.src
+    } else if parser.parse_int()   is some(int)    then ToastExpr.int(int)
+    else if parser.parse_string()? is some(string) then ToastExpr.string(string)
+    else if parser.parse_name()    is some(name)   then ToastExpr.name(name)
+    else if parser.parse_symbol()  is some(symbol) then ToastExpr.symbol(symbol)
     else return no_match[ToastExpr]()
 
   loop {
@@ -318,9 +359,9 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
       return bad_input[ToastExpr](error(
         "Expected name of the field", parser.src_of_rest()
       ))
-    expr = ToastExprKind.member(ToastMember {
+    expr = ToastExpr.member(ToastMember {
       of = expr.put_on_heap(), name
-    }) @ {expr.src ... name.src}
+    })
   }
 
   parsed(expr)
@@ -334,9 +375,9 @@ fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   var args = list[ToastExpr]()
   loop args.&.push(parser.parse_atom()? or break)
   if args.is_not_empty() then
-    expr = ToastExprKind.call(ToastCall {
+    expr = ToastExpr.call(ToastCall {
       receiver = expr.put_on_heap(), args = args.to_slice()
-    }) @ {expr.src ... args.last().src}
+    })
 
   parsed(expr)
 }
@@ -354,8 +395,7 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   if parser.consume(#=) is some(equals_src) then {
     var cursor_after_equals_sign = parser.cursor
     if parser.parse_expr()? is some(value) then
-      expr = ToastExprKind.var_(create_var(expr, value, equals_src)?)
-        @ {expr.src ... value.src}
+      expr = ToastExpr.var_(create_var(expr, value, equals_src)?)
     else
       parser.cursor = cursor_after_equals_sign - 1
   }
@@ -422,7 +462,7 @@ fun parse_type_expr(parser: &Parser): Result[Maybe[ToastType], Error] {
 fun create_var(
   left: ToastExpr, right: ToastExpr, equals_src: Src
 ): Result[ToastVar, Error] {
-  switch left.kind
+  switch left
   case name(name)
     ok[ToastVar, Error](ToastVar { name, value = right.put_on_heap() })
   default
@@ -469,9 +509,9 @@ fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
         }
       fields.&.push(ToastTypeField { name, type })
     }
-    ok[ToastType, Error](ToastType.struct_(fields))
+    ok[ToastType, Error](ToastType.struct_(fields.to_slice()))
   } else if bacon.line == "|" then {
-    var variants = list[ToastTypeCase]()
+    var variants = list[ToastTypeVariant]()
     for variant in bacon.children do {
       var parser = parser(variant.line, variant.src)
       var name = parser.&.parse_symbol() or
@@ -494,9 +534,9 @@ fun to_toast_type(bacon: Bacon): Result[ToastType, Error] {
             ))
           variant.children.to_toast_types()?
         }
-      variants.&.push(ToastTypeCase { name, args })
+      variants.&.push(ToastTypeVariant { name, args })
     }
-    ok[ToastType, Error](ToastType.enum_(variants))
+    ok[ToastType, Error](ToastType.enum_(variants.to_slice()))
   } else {
     var parser = parser(bacon.line, bacon.src)
     if bacon.children.is_empty() then {
@@ -578,14 +618,13 @@ fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
     if children.is_empty() then return bad_input[ToastExpr](error(
       "Expected a body.", equals_src
     ))
-    var body_src = children.first().src ... children.last().src
-    expr = ToastExprKind.var_(
-      create_var(expr, ToastExprKind.body(children) @ body_src, equals_src)?
-    ) @ {expr.src ... children.last().src}
+    expr = ToastExpr.var_(
+      create_var(expr, ToastExpr.body(children), equals_src)?
+    )
   } else if children.is_not_empty() then
-    expr = ToastExprKind.call(ToastCall {
+    expr = ToastExpr.call(ToastCall {
       receiver = expr.put_on_heap(), args = children
-    }) @ {expr.src ... children.last().src}
+    })
   parser.&.is_done() or
     return bad_input[ToastExpr](error(
       "Additional garbage on line.", parser.src_of_rest()
@@ -594,6 +633,7 @@ fun to_toast_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
 }
 fun to_toast_struct(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
   bacon.line == "&" or return no_match[ToastExpr]()
+  var ampersand = "&" @ bacon.src
   var fields = list[ToastField]()
   for field in bacon.children do {
     var parser = parser(field.line, field.src)
@@ -630,14 +670,14 @@ fun to_toast_struct(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
       }
     fields.&.push(ToastField { name, value })
   }
-  parsed(
-    ToastExprKind.struct_(fields.to_slice())
-      @ {bacon.src ... fields.last().value.src}
-  )
+  parsed(ToastExpr.struct_(ToastStruct {
+    ampersand, fields = fields.to_slice()
+  }))
 }
 fun parse_lambda(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
   var parser = parser(bacon.line, bacon.src)
   var backslash_src = parser.&.consume("\\") or return no_match[ToastExpr]()
+  var backslash = "\\" @ backslash_src
 
   var params = list[ToastParam]()
   loop params.&.push(parser.&.parse_param()? or break)
@@ -666,19 +706,20 @@ fun parse_lambda(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
       var children = bacon.children.to_toast_exprs()?
       if children.is_empty() then
         return bad_input[ToastExpr](error("Expected lambda body.", equals_src))
-      var body_src = children.first().src ... children.last().src
-      ToastExprKind.body(children) @ body_src
+      ToastExpr.body(children)
     }
 
-  parsed(ToastExprKind.lambda(ToastLambda {
+  parsed(ToastExpr.lambda(ToastLambda {
+    backslash,
     params = params.to_slice(),
     body = body.put_on_heap(),
-  }) @ {backslash_src ... body.src})
+  }))
 }
 fun parse_switch(
   bacon: Bacon, condition: ToastExpr
 ): Result[Maybe[ToastExpr], Error] {
   bacon.line == "%" or return no_match[ToastExpr]()
+  var percent = "%" @ bacon.src
   var cases = list[ToastCase]()
   for case_ in bacon.children do {
     var parser = parser(case_.line, case_.src)
@@ -699,8 +740,7 @@ fun parse_switch(
           return bad_input[ToastExpr](error(
           "Expected the body of the case.", colon_src,
         ))
-        var body_src = {children.first().src ... children.last().src}
-        ToastExprKind.body(children) @ body_src
+        ToastExpr.body(children)
       } else {
         var expr = parser.&.parse_expr()? or
           return bad_input[ToastExpr](error(
@@ -718,9 +758,9 @@ fun parse_switch(
       }
     cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
   }
-  parsed(ToastExprKind.switch_(ToastSwitch {
-    condition = condition.put_on_heap(), cases = cases.to_slice()
-  }) @ {bacon.src ... if cases.is_empty() then bacon.src else cases.last().body.src})
+  parsed(ToastExpr.switch_(ToastSwitch {
+    condition = condition.put_on_heap(), percent, cases = cases.to_slice()
+  }))
 }
 fun parse_pipe(
   bacon: Bacon, previous: ToastExpr
@@ -736,16 +776,16 @@ fun parse_pipe(
   parsed(piped_call(previous, piped_into))
 }
 fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
-  if piped_into.kind is call(call) then {
+  if piped_into is call(call) then {
     var args = list(left)
     for arg in call.args do args.&.push(arg)
-    ToastExprKind.call(ToastCall {
+    ToastExpr.call(ToastCall {
       receiver = call.receiver, args = args.to_slice()
-    }) @ {left.src ... piped_into.src}
+    })
   } else
-    ToastExprKind.call(ToastCall {
+    ToastExpr.call(ToastCall {
       receiver = piped_into.put_on_heap(), args = list(left).to_slice()
-    }) @ {left.src ... piped_into.src}
+    })
 }
 fun to_toast_exprs(bacons: Slice[Bacon]): Result[Slice[ToastExpr], Error] {
   var exprs = list[ToastExpr]()
@@ -801,8 +841,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
       var children = bacon.children.to_toast_exprs()?
       if children.is_empty() then
         return bad_input[ToastFun](error("Expected function body.", equals_src))
-      var body_src = children.first().src ... children.last().src
-      ToastExprKind.body(children) @ body_src
+      ToastExpr.body(children)
     }
 
   parsed(ToastFun { name, params = params.to_slice(), return_type, body })
