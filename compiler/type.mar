@@ -1,8 +1,22 @@
-| Types in Plum  
+| Type Algorithms  
+|
 | Plum has a structural type system, which means that types don't have
 | identities. If you define Foo = Int and Bar = Int, then Foo, Bar, and Int can
 | be used interchangably. Starting with the Egg compiler stage, all types are
 | self-contained and you don't any type definitions any more.
+|
+| Turns out, some of the things we want to do with types are not trivial because
+| of recursive types. For example, unioning these two enums results in a mess:
+|
+| | Foo (| Bar ^2) = | Foo (| Bar (| Foo (| Bar (...))))
+| | Foo ^1         = | Foo (| Foo (| Foo (| Foo (...))))
+|
+| The unioned type is this:
+|
+| | Foo (| Foo (| Foo ^1) Bar (| Foo (| Bar ^2)))
+|
+| Basically, the top-level is always the Foo variant and the level below that
+| decides whether it is Foo forever or whether Foo and Bar alternate.
 |
 | This file contains most operations that we need to perform on types.
 

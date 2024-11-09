@@ -129,22 +129,6 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   }
 }
 
-
-| Type Algorithms  
-| Turns out, some of the things we want to do with types are not trivial because
-| of recursive types. For example, joining these two enums results in a mess:
-|
-| | Foo (| Bar ^2) = | Foo (| Bar (| Foo (| Bar (...))))
-| | Foo ^1         = | Foo (| Foo (| Foo (| Foo (...))))
-|
-| The joined type is this:
-|
-| | Foo (| Foo (| Foo ^1) Bar (| Foo (| Bar ^2)))
-|
-| Basically, the top-level is always the Foo variant and the level below that
-| decides whether it is Foo forever or whether Foo and Bar alternate.
-
-
 | Variable Scoping  
 | Tracks which names are in scope using a simple vector:
 | - When new names are defined, appends items to the vector.
