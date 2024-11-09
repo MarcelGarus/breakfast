@@ -61,7 +61,7 @@ fun main(): Never {
   var return_value = universe.&.call(main, list(five).to_slice())
   stdout.write_deep(return_value, universe)
   println()
-  println(universe)
+  | println(universe)
 
   exit(0)
 }
