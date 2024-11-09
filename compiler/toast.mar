@@ -206,37 +206,37 @@ fun src(expr: ToastExpr): Src {
 | The parser walks through a string from start to end. It maintains a cursor to
 | do that.
 
-struct Parser { input: String, input_src: Src, cursor: Int }
+struct LineParser { input: String, input_src: Src, cursor: Int }
 fun parser(input: String, src: Src): _ {
-  Parser { input, input_src = src, cursor = 0 }
+  LineParser { input, input_src = src, cursor = 0 }
 }
-fun src_of(parser: Parser, cursor_range: Range[Int]): Src {
+fun src_of(parser: LineParser, cursor_range: Range[Int]): Src {
   var start_offset = parser.input_src.range.start
   parser.input_src.with_range(
     {start_offset + cursor_range.start}..{start_offset + cursor_range.end}
   )
 }
-fun src_of_rest(parser: Parser): Src {
+fun src_of_rest(parser: LineParser): Src {
   parser.input_src.with_range(
     {parser.input_src.range.start + parser.cursor}..parser.input_src.range.end
   )
 }
-fun current(parser: Parser): Char {
+fun current(parser: LineParser): Char {
   parser.input.chars().get_maybe(parser.cursor) or 0.lower_byte().to_char()
 }
-fun advance(parser: &Parser) { parser.cursor = parser.cursor + 1 }
-fun is_at_end(parser: Parser): Bool { parser.cursor == parser.input.len }
-fun consume_whitespace(parser: &Parser) {
+fun advance(parser: &LineParser) { parser.cursor = parser.cursor + 1 }
+fun is_at_end(parser: LineParser): Bool { parser.cursor == parser.input.len }
+fun consume_whitespace(parser: &LineParser) {
   loop {
     parser.current().is_whitespace() or break
     parser.advance()
   }
 }
-fun is_done(parser: &Parser): Bool {
+fun is_done(parser: &LineParser): Bool {
   parser.consume_whitespace()
   parser.is_at_end()
 }
-fun consume(parser: &Parser, prefix: String): Maybe[StringAndSrc] {
+fun consume(parser: &LineParser, prefix: String): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   var start = parser.cursor
   for char in prefix.chars() do {
@@ -260,7 +260,7 @@ fun parsed[T](value: T): Result[Maybe[T], Error] {
   ok[Maybe[T], Error](some(value))
 }
 
-fun parse_int(parser: &Parser): Maybe[IntAndSrc] {
+fun parse_int(parser: &LineParser): Maybe[IntAndSrc] {
   parser.consume_whitespace()
   var num = 0
   var start = parser.cursor
@@ -274,7 +274,7 @@ fun parse_int(parser: &Parser): Maybe[IntAndSrc] {
   if start == end then return none[IntAndSrc]()
   some(num @ parser.src_of(start..end))
 }
-fun parse_string(parser: &Parser): Result[Maybe[StringAndSrc], Error] {
+fun parse_string(parser: &LineParser): Result[Maybe[StringAndSrc], Error] {
   var start_quote = parser.consume("\"") or return no_match[StringAndSrc]()
   var start = parser.cursor
   loop {
@@ -291,7 +291,7 @@ fun parse_string(parser: &Parser): Result[Maybe[StringAndSrc], Error] {
   parsed(parser.input.substr(start..end) @ {start_quote.src ... end_quote.src})
 }
 var identifier_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_+-*/<>"
-fun parse_identifier(parser: &Parser): Maybe[StringAndSrc] {
+fun parse_identifier(parser: &LineParser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   var start = parser.cursor
   loop {
@@ -307,18 +307,18 @@ fun parse_identifier(parser: &Parser): Maybe[StringAndSrc] {
   }
   some(identifier @ parser.src_of(start..end))
 }
-fun parse_name(parser: &Parser): Maybe[StringAndSrc] {
+fun parse_name(parser: &LineParser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   not(parser.current().is_upper()) or return none[StringAndSrc]()
   parser.parse_identifier()
 }
-fun parse_symbol(parser: &Parser): Maybe[StringAndSrc] {
+fun parse_symbol(parser: &LineParser): Maybe[StringAndSrc] {
   parser.consume_whitespace()
   parser.current().is_upper() or return none[StringAndSrc]()
   parser.parse_identifier()
 }
 | Parses an expression that doesn't include whitespace (except in parentheses).
-fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+fun parse_atom(parser: &LineParser): Result[Maybe[ToastExpr], Error] {
   var start = parser.cursor
   var expr =
     if parser.consume("(") is some(paren) then {
@@ -352,7 +352,7 @@ fun parse_atom(parser: &Parser): Result[Maybe[ToastExpr], Error] {
   parsed(expr)
 }
 | Parses an expression that doesn't contain pipes (except in parentheses).
-fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+fun parse_unpiped_expr(parser: &LineParser): Result[Maybe[ToastExpr], Error] {
   | if parser.parse_lambda()? is some(lambda) then return parsed(lambda)
 
   var expr = parser.parse_atom()? or return no_match[ToastExpr]()
@@ -366,7 +366,7 @@ fun parse_unpiped_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 
   parsed(expr)
 }
-fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
+fun parse_expr(parser: &LineParser): Result[Maybe[ToastExpr], Error] {
   var expr = parser.parse_unpiped_expr()? or return no_match[ToastExpr]()
 
   loop {
@@ -387,7 +387,7 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 
   parsed(expr)
 }
-| fun parse_lambda(parser: &Parser): Result[Maybe[ToastLambda], Error] {
+| fun parse_lambda(parser: &LineParser): Result[Maybe[ToastLambda], Error] {
 |   parser.consume("\\") or return no_match[ToastLambda]()
 
 |   var params = list[ToastParam]()
@@ -399,7 +399,7 @@ fun parse_expr(parser: &Parser): Result[Maybe[ToastExpr], Error] {
 |     ))
 | }
 
-fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
+fun parse_type_atom(parser: &LineParser): Result[Maybe[ToastType], Error] {
   if parser.consume("(") is some(paren) then {
     var type = parser.parse_type_expr()? or
       return bad_input[ToastType](error(
@@ -419,7 +419,7 @@ fun parse_type_atom(parser: &Parser): Result[Maybe[ToastType], Error] {
     return parsed(ToastType.variable(name))
   no_match[ToastType]()
 }
-fun parse_type_expr(parser: &Parser): Result[Maybe[ToastType], Error] {
+fun parse_type_expr(parser: &LineParser): Result[Maybe[ToastType], Error] {
   if parser.consume("\\") is some then {
     var args = list[ToastType]()
     loop args.&.push(parser.parse_type_atom()? or break)
@@ -830,7 +830,7 @@ fun to_toast_fun_def(bacon: Bacon): Result[Maybe[ToastFun], Error] {
 
   parsed(ToastFun { name, params = params.to_slice(), return_type, body })
 }
-fun parse_param(parser: &Parser): Result[Maybe[ToastParam], Error] {
+fun parse_param(parser: &LineParser): Result[Maybe[ToastParam], Error] {
   var name = parser.parse_name() or return no_match[ToastParam]()
   parser.consume(":") or
     return bad_input[ToastParam](error(
