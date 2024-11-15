@@ -42,8 +42,7 @@ enum ByteCodeInstruction {
   | control flow stuff
   jump: Address,
   jump_table: Slice[Address], | pops a byte. depending on the symbol, jumps to different instruction indices
-  lambda_call, | TODO
-  call: Address, | calls another function from the same compilation unit
+  call: Address, | calls another function. TODO: runtime-known address?
   ret, | returns from a function call
   | arithmetic stuff
   add_64, | pops two 64-bit ints, adds them, pushes the result as a 64-bit int
@@ -83,7 +82,6 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
     writer."jump_table"
     for target in table do writer." {target}"
   }
-  case lambda_call(target) writer."lambda_call {target}"
   case call(target) writer."call {target}"
   case ret writer."ret"
   case add_64 writer."add_64"
@@ -154,9 +152,6 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     case jump_table(table) {
       var byte = vm.data_stack.&.pop()
       current_call.* = table.get(byte.to_int())
-    }
-    case lambda_call {
-      todo()
     }
     case call(target) vm.call_stack.&.push(target)
     case ret vm.call_stack.&.pop().ignore()
