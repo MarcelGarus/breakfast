@@ -120,7 +120,7 @@ less_than a: Int b: Int -> Bool =
 # add a: Byte b: Byte -> Byte = builtin_add_bytes a b
 # sub a: Byte b: Byte -> Byte = builtin_sub_bytes a b
 # mul a: Byte b: Byte -> Byte = builtin_mul_bytes a b
-# div a: Byte b: Byte -> Byte = builtin_div_bytes a b
+# / a: Byte b: Byte -> Byte = builtin_/_bytes a b
 # mod a: Byte b: Byte -> Byte = builtin_mod_bytes a b
 # and a: Byte b: Byte -> Byte = builtin_and_bytes a b
 # or a: Byte b: Byte -> Byte = builtin_or_bytes a b
@@ -153,8 +153,8 @@ less_than a: Int b: Int -> Bool =
 
 + a: Int b: Int -> Int = builtin_add_ints a b
 - a: Int b: Int -> Int = builtin_sub_ints a b
-mul a: Int b: Int -> Int = builtin_mul_ints a b
-div a: Int b: Int -> Int = builtin_div_ints a b
+* a: Int b: Int -> Int = builtin_mul_ints a b
+/ a: Int b: Int -> Int = builtin_div_ints a b
 mod a: Int b: Int -> Int = builtin_mod_ints a b
 and a: Int b: Int -> Int = builtin_and_ints a b
 or a: Int b: Int -> Int = builtin_or_ints a b
@@ -166,7 +166,7 @@ shift_left int: Int by: Int -> Int =
 shift_right int: Int by: Int -> Int =
   by | equals 0
   % True: int
-    False: int | div 2 | shift_left (by | - 1)
+    False: int | / 2 | shift_left (by | - 1)
 # pow base: Int exponent: Int -> Int = pow_rec 1 base exponent
 pow_rec result: Int base: Int exponent: Int -> Int =
   # TODO: do this more efficiently
@@ -181,7 +181,7 @@ abs int: Int -> Int =
     Greater: int
 compare a: Int b: Int -> Ordering = builtin_compare_ints a b
 round_up_to_multiple_of number: Int factor: Int -> Int =
-  number | + factor | - 1 | div factor | mul factor
+  number | + factor | - 1 | / factor | mul factor
 round_up_to_power_of number: Int factor: Int -> Int =
   round_up_to_power_of_rec 1 number factor
 round_up_to_power_of_rec power: Int number: Int factor: Int -> Int =
@@ -206,7 +206,7 @@ sqrt_rec candidate: Int target: Int -> Int =
 log_two value: Int -> Int =
   value | equals 1
   % True: 0
-    False: log_two (value | div 2) | + 1
+    False: log_two (value | / 2) | + 1
 # lower_byte int: Int -> Byte = builtin_lower_byte int
 equals a: Int b: Int -> Bool =
   builtin_compare_ints a b
@@ -264,7 +264,7 @@ to_string int: Int -> String =
       +
         int | less_than 10
         % True: ""
-          False: int | div 10 | to_string
+          False: int | / 10 | to_string
         last_digit_string
 
 # Strings  
@@ -281,6 +281,35 @@ unwrap maybe: (Maybe t) message: String -> t =
   % Some t: t
     None: builtin_crash message
 unwrap maybe: (Maybe t) -> t = maybe | unwrap "Called unwrap on None"
+
+# Result  
+
+Result o e =
+  | Ok o
+    Error e
+unwrap result: (Result o e) message: String -> o =
+  result
+  % Ok value: value
+    Error error: builtin_crash message
+unwrap result: (Result o e) -> o = result | unwrap "Called unwrap on Error"
+
+# Types  
+
+TypeInfo =
+  | Int
+    String
+    Struct (List Field)
+    Enum (List Variant)
+    Type
+Field =
+  & name: String
+    type: Type
+Variant =
+  & name: String
+    args: List Type
+
+type_of value: t -> Type = builtin_type_of value
+type_info type: Type -> TypeInfo = builtin_type_info type
 
 # List  
 
@@ -307,8 +336,53 @@ get list: (List t) index: Int -> t =
 
 ####################### Actual program #######################
 
-main a: Int -> String =
-  list 1 2 3 | len
-  +
-    "Hello, world! There are "
-    + (a | to_string) " arguments."
+#compile
+#  implementation: ByteCode
+#  input: Type
+#  output: Type
+#  -> (input -> output) = ...
+
+Task =
+  | Print String (\ -> Task)
+    Exit
+
+Point =
+  & x: Int
+    y: Int
+
+main a: Int -> Int =
+  + 2 3
+
+make_incremeter a: Int -> (\ Int -> Int) =
+  \ b: Int =
+    + a b
+
+to_deutsch type: Type -> String =
+  type
+  % Int: "Zahl"
+    String: "Zeichenkette"
+    Struct fields:
+      "Struktur (Felder sind " | + (fields | to_deutsch) | + ")"
+    Enum variants: "Enumeration (" | + (variants | to_deutsch) | + ")"
+    Type: "Typ"
+
+to_deutsch fields: (List Field) -> String =
+  fields
+  % Empty: "keine Felder"
+    More field rest:
+      rest
+      % Empty: field.name
+        More a b:
+          field.name
+          | + "("
+          | + (field.type | to_deutsch)
+          | + ") und "
+          | + (rest | to_deutsch)
+
+to_deutsch variants: (List Variant) -> String =
+  variants
+  % Empty: "keine Varianten"
+    More variant rest:
+      rest
+      % Empty: variant.name
+        More a b: variant.name | + " oder " | + (rest | to_deutsch)
