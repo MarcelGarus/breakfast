@@ -1,0 +1,61 @@
+| A Low-Level Intermediate Representation  
+|
+| This compiler stage is pretty low-level. It's no longer graph based, but
+| mainly tree based – as a preparation for lowering to stack-based byte code.
+| Types no longer exist. Instead, each expression corresponds to a slice of
+| bytes. For expressions to be compatible (such as branches of a switch), they
+| just have to have the same length.
+| Structs have been converted into runs of expressions (shown using curly
+| braces). Enums have been converted into tagged unions.
+|
+| TODO: alignment
+| TODO: heap
+| TODO: reference counting
+|
+| main Int: @0:word
+|   | Creating and accessing a struct.
+|   | foo = & x: @0 y: 42
+|   | foo.y
+|   @1 = {@0 42:word}.member(8)
+|   | Creating and switching on an enum.
+|   | foo: Bool = True
+|   | foo
+|   | % True: Some 5
+|   |   False: None
+|   @2 = {1:byte}.member(0) %
+|     0 -> {padding(8) 0:byte}
+|     1 -> {5:word 1:byte}
+
+import plum.mar
+
+struct Lir { funs: Map[LirSignature, LirFun] }
+struct LirSignature { str: String }
+
+struct LirFun { locals: Slice[LirExpr], body: LirBody }
+struct LocalId { index: Int } | index into the LirFun's locals
+struct LirBody { locals: Slice[LocalId], returns: LirExpr }
+
+enum LirType {
+  byte,
+  word,
+  padding: Int,
+  struct_: Slice[LirType],
+  union_: Slice[LirType],
+}
+
+enum LirExpr {
+  param: LirType,
+  padding: Int,
+  byte: Byte, | 8 bits
+  word: Int,  | 64 bits
+  local: LocalId,
+  struct_: Slice[LirExpr],
+  member: LirMember,
+  switch_: LirSwitch,
+  call: LirCall,
+  instruction: LirInstruction,
+}
+struct LirMember { of: LirExpr, offset: Int }
+struct LirSwitch { byte: LirExpr, cases: Slice[LirBody] }
+struct LirCall { function: LirSignature, args: LirExpr }
+struct LirInstruction { instruction: Instruction, args: LirExpr } | TODO: ?
