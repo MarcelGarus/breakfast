@@ -52,6 +52,7 @@ struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
 fun ==(a: YogurtId, b: YogurtId): Bool { a.int == b.int }
+fun hash(hasher: &Hasher, id: YogurtId) { hasher.hash(id.int) }
 
 fun yogurt_signature(
   name: String, params: Slice[YogurtParam]
@@ -64,6 +65,8 @@ fun yogurt_signature(
 }
 fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
 fun hash(hasher: &Hasher, sig: YogurtSignature) { hasher.hash(sig.str) }
+
+fun return_type(fun_: YogurtFun): PlumType { fun_.get(fun_.body.returns).type }
 
 fun write[W](writer: W, yogurt: Yogurt) {
   var first = true
@@ -679,19 +682,28 @@ fun to_yogurt(
     }
     case call(call) {
       var name = call.receiver
+
       var args = list[YogurtId]()
+      for arg in call.args do args.&.push(compiler.lookup(arg))
+      var args = args.to_slice()
+
+      var are_all_args_comptime = true
+      for arg in args do
+        if not(builder.get(arg).op is comptime) then
+          are_all_args_comptime = false
+
       var arg_params = list[YogurtParam]()
-      for arg in call.args do {
-        var arg = compiler.lookup(arg)
+      for arg in args do {
         var type = builder.get(arg).type
-        args.&.push(arg)
         arg_params.&.push(
           if builder.get(arg).op is comptime(value)
-          then YogurtParam.comptime(value)
+          then
+            if false
+            then YogurtParam.comptime(value)
+            else YogurtParam.runtime(type)
           else YogurtParam.runtime(type)
         )
       }
-      var args = args.to_slice()
       var arg_params = arg_params.to_slice()
 
       var result = compiler.egg.lookup(name.string, arg_params) or(error)
