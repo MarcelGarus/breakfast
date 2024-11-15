@@ -13,8 +13,12 @@ struct StructLayout {
 }
 struct EnumLayout {
   variants: Map[String, VariantLayout],
-  tag_size: Int,
-  tag_offset: Int,
+  tag_layout: Maybe[TagLayout],
+}
+struct TagLayout {
+  offset_in_enum: Int,
+  num_to_variant: Slice[String],
+  variant_to_num: Map[String, Byte],
 }
 struct VariantLayout {
   arg_offsets: Slice[Int],
@@ -93,15 +97,23 @@ fun memory_layout(type: PlumType): MemoryLayout {
       })
     }
 
-    var tag_offset = payload_size
-    var tag_size = if enum_.size > 1 then 1 else 0
+    var tag_layout = if enum_.size <= 1 then none[TagLayout]() else {
+      var num_to_variant = list[String]()
+      var variant_to_num = map[String, Byte]()
+      for variant in enum_.iter() do {
+        variant_to_num.&.put(variant.key, num_to_variant.len.lower_byte())
+        num_to_variant.&.push(variant.key)
+      }
+      some(TagLayout {
+        offset_in_enum = payload_size,
+        num_to_variant = num_to_variant.to_slice(), variant_to_num,
+      })
+    }
 
     MemoryLayout {
-      size = tag_offset + tag_size,
+      size = payload_size + if tag_layout is some then 1 else 0,
       alignment = payload_alignment,
-      kind = MemoryLayoutKind.enum_(EnumLayout {
-        tag_offset, tag_size, variants
-      })
+      kind = MemoryLayoutKind.enum_(EnumLayout { variants, tag_layout })
     }
   }
   case lambda(lambda)

@@ -210,7 +210,7 @@ fun push_value(builder: &ByteCodeBuilder, value: YogurtValue) {
     |   y: 3
     |
     | becomes:
-    | 
+    |
     | push_64 2  | 02 00 00 00 00 00 00 00
     | push_64 3  | 02 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00
     var layout = value.type.memory_layout()
@@ -226,10 +226,30 @@ fun push_value(builder: &ByteCodeBuilder, value: YogurtValue) {
     }
   }
   case tag(tag) {
-    todo()
-    | var args = list[ObjectId]()
-    | for arg in tag.b do args.&.push(arg.to_instructions(universe, code, signature_to_address))
-    | universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
+    | Some 5
+    |
+    | becomes:
+    |
+    | push_64 5  | 05 00 00 00 00 00 00 00
+    | push_8 0
+    var variant = tag.a
+    var args = tag.b
+    var layout = value.type.memory_layout()
+    var enum_layout = layout.kind.enum_.unwrap()
+    var args_layout = enum_layout.variants.get(variant)
+    var offset = 0
+    for index in args_layout.args_sorted_by_offset do {
+      var value = args.get(index)
+      var required_offset = args_layout.arg_offsets.get(index)
+      var size = args_layout.arg_layouts.get(index).size
+      builder.push_padding(required_offset - offset)
+      builder.push_value(value)
+      offset = required_offset + size
+    }
+    if enum_layout.tag_layout is some(tag) then {
+      builder.push_padding(tag.offset_in_enum - offset)
+      builder.emit(ByteCodeInstruction.push_8(tag.variant_to_num.get(variant)))
+    }
   }
   case lambda(lambda) {
     todo()
@@ -290,15 +310,23 @@ fun compile(
       builder.copy_from_stack(field_offset_from_top, size)
     }
     case tag(tag) {
-      todo("tag")
-      | for arg in tag.args do {
-      |   instructions.push(ByteCodeInstruction.push_from_stack(
-      |     builder.find_distance_from_top(arg)
-      |   ))
-      |   builder.push(arg)
-      | }
-      | instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
-      | builder.pop(tag.args.len)
+      var enum_layout = type.memory_layout().kind.enum_.unwrap()
+      var args_layout = enum_layout.variants.get(tag.symbol)
+      var offset = 0
+      for index in args_layout.args_sorted_by_offset do {
+        var arg = tag.args.get(index)
+        var required_offset = args_layout.arg_offsets.get(index)
+        var size = args_layout.arg_layouts.get(index).size
+        builder.push_padding(required_offset - offset)
+        builder.copy_from_stack(id, args_layout.arg_layouts.get(index).size)
+        offset = required_offset + size
+      }
+      if enum_layout.tag_layout is some(layout) then {
+        builder.push_padding(layout.offset_in_enum - offset)
+        builder.emit(ByteCodeInstruction.push_8(
+          layout.variant_to_num.get(tag.symbol)
+        ))
+      }
     }
     case switch_(switch_) {
       todo("switch")
