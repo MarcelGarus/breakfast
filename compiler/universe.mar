@@ -200,17 +200,30 @@ fun push_value(builder: &ByteCodeBuilder, value: YogurtValue) {
     |
     | becomes:
     |
-    | push_64 ...           | 12 34 56 78 00 00 00 00
-    | push_64 2             | 12 34 56 78 00 00 00 00 02 00 00 00 00 00 00 00
+    | push_64 ...  | 12 34 56 78 00 00 00 00
+    | push_64 2    | 12 34 56 78 00 00 00 00 02 00 00 00 00 00 00 00
     builder.emit(ByteCodeInstruction.push_64(string.data.to_int()))
     builder.emit(ByteCodeInstruction.push_64(string.len))
   }
   case struct_(struct_) {
-    todo()
-    | var fields = map[String, ObjectId]()
-    | for field in struct_ do
-    |   fields.&.put(field.key, field.value.to_instructions(universe, code, signature_to_address))
-    | universe.new(Object.struct_(fields))
+    | & x: 2
+    |   y: 3
+    |
+    | becomes:
+    | 
+    | push_64 2  | 02 00 00 00 00 00 00 00
+    | push_64 3  | 02 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00
+    var layout = value.type.memory_layout()
+    var struct_layout = layout.kind.struct_.unwrap()
+    var offset = 0
+    for field in struct_layout.fields_sorted_by_offset do {
+      var value = struct_.get(field)
+      var required_offset = struct_layout.field_to_offset.get(field)
+      var size = struct_layout.field_to_layout.get(field).size
+      builder.push_padding(required_offset - offset)
+      builder.push_value(value)
+      offset = required_offset + size
+    }
   }
   case tag(tag) {
     todo()
@@ -255,25 +268,26 @@ fun compile(
     case uninitialized builder.push_padding(layout.size)
     case comptime(value) builder.push_value(value)
     case struct_(struct_) {
-      todo("struct")
-      | var fields = list[String]()
-      | for field in struct_ do fields.&.push(field.key)
-      | for field in fields do {
-      |   var value = struct_.get(field)
-      |   instructions.push(ByteCodeInstruction.push_from_stack(
-      |     builder.find_distance_from_top(value)
-      |   ))
-      |   builder.push(value)
-      | }
-      | instructions.push(ByteCodeInstruction.struct_(fields))
-      | builder.pop(fields.len)
+      var layout = expr.type.memory_layout()
+      var struct_layout = layout.kind.struct_.unwrap()
+      var offset = 0
+      for field in struct_layout.fields_sorted_by_offset do {
+        var value = struct_.get(field)
+        var required_offset = struct_layout.field_to_offset.get(field)
+        var size = struct_layout.field_to_layout.get(field).size
+        builder.push_padding(required_offset - offset)
+        builder.copy_from_stack(value, size)
+        offset = required_offset + size
+      }
     }
     case member(member) {
-      todo("member")
-      | instructions.push(ByteCodeInstruction.push_from_stack(
-      |   builder.find_distance_from_top(member.of)
-      | ))
-      | instructions.push(ByteCodeInstruction.member(member.name))
+      var struct_layout =
+        fun_.get(member.of).type.memory_layout().kind.struct_.unwrap()
+      var struct_offset = builder.find_distance_from_top(member.of)
+      var field_offset_in_struct = struct_layout.field_to_offset.get(member.name)
+      var field_offset_from_top = struct_offset - field_offset_in_struct
+      var size = struct_layout.field_to_layout.get(member.name).size
+      builder.copy_from_stack(field_offset_from_top, size)
     }
     case tag(tag) {
       todo("tag")

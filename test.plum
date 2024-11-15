@@ -351,7 +351,11 @@ Point =
     y: Int
 
 main a: Int -> Int =
-  + 2 3
+  foo =
+    & x: 42
+      y: "hi"
+      z: a
+  foo.x
 
 make_incremeter a: Int -> (\ Int -> Int) =
   \ b: Int =
