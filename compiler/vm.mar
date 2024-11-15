@@ -1,193 +1,174 @@
 | The Virtual Machine  
+|
 | Internally, code runs in a stack-based virtual machine (VM), something like a
 | mini-computer implemented in software. The VM has its own data stack and call
-| stack and operates on instructions (called byte code instructions).
+| stack and operates on instructions (called byte code instructions). From the
+| point of view of the VM, Plum types no longer exist. Instead, the instructions
+| operate on memory directly, reading from and writing to addresses.
+|
+| The idea is that instructions and objects live somewhere in memory. We don't
+| need to keep track of them, for example by putting them in a List. They just
+| float around just like our own data structures – the VM just operates on their
+| raw Addresses.
+|
+|     [object 1]                           [object2]
+|
+|   [instruction][instruction][instruction][instruction]
+|
+|                           [object 3]
+|
+| Fig 1: objects floating around in memory
+|
+| The endianness of ints and the stack direction are undefined. Other
+| implementations of this byte code are free to chose whatever they want. In
+| particular, this means that byte code SHOULD NOT depend on these things. For
+| example, you should not push_64(5) and then use pop_8() to pop individual
+| bytes.
 
 import plum.mar
 
 struct Vm {
-  universe: &Universe,
-  data_stack: List[ObjectId],
-  call_stack: List[CallStackEntry],
+  data_stack: List[Byte],
+  call_stack: List[Address], | Address points to ByteCodeInstructions
 }
-struct CallStackEntry {
-  code: ObjectId, fun_: FunId, instruction_index: Int
+
+enum ByteCodeInstruction {
+  | stack stuff
+  push_8: Byte,
+  push_64: Int,
+  push_8_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
+  push_64_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
+  pop_below_top: Tuple2[Int, Int], | (skip, amount). pops amount bytes below the top skip bytes
+  | control flow stuff
+  jump: Address,
+  jump_table: Slice[Address], | pops a byte. depending on the symbol, jumps to different instruction indices
+  lambda_call, | TODO
+  call: Address, | calls another function from the same compilation unit
+  ret, | returns from a function call
+  | arithmetic stuff
+  add_64, | pops two 64-bit ints, adds them, pushes the result as a 64-bit int
+  sub_64, | pops two 64-bit ints, subtracts them, pushes the result as a 64-bit int
+  mul_64, | pops two 64-bit ints, multiplies them, pushes the result as a 64-bit int
+  div_64, | pops two 64-bit ints, divides them, pushes the result as a 64-bit int
+  mod_64, | pops two 64-bit ints, mods them, pushes the result as a 64-bit int
+  | binary stuff
+  and_64, | pops two 64-bit ints, ands them, pushes the result as a 64-bit int
+  or_64, | pops two 64-bit ints, ors them, pushes the result as a 64-bit int
+  xor_64, | pops two 64-bit ints, xors them, pushes the result as a 64-bit int
+  | memory stuff
+  malloc, | pops alignment (8-bit), size (64-bit), pushes address (64 bits)
+  store_8, | pops byte (8-bit), pops address (64-bit), stores byte to that address
+  store_64, | pops int (64-bit), pops address (64-bit), stores int to that address
+  load_8, | pops address (64-bit), loads byte from that address, pushes that byte
+  load_64, | pops address (64-bit), loads int from that address, pushes that int
+  | error stuff
+  crash,
 }
 
 fun write[W](writer: W, vm: Vm) {
   writer."data stack:"
-  for id in vm.data_stack do {
-    writer." "
-    writer.write_deep(id, vm.universe.*)
-  }
+  for byte in vm.data_stack do writer." {byte}"
   writer."\ncall stack:"
-  for call in vm.call_stack do
-    writer."\n- {vm.get(call.code).code.unwrap().get(call.fun_).name.debug()}:{call.instruction_index}"
-  | writer."\ninstructions:"
-  | for instruction in vm.instructions.iter().enumerate() do {
-  |   var is_current = instruction.index == vm.instruction_pointer
-  |   writer."\n{if is_current then ">" else " "} "
-  |   writer.write(instruction.item, vm)
-  | }
+  for call in vm.call_stack do writer." {call}"
 }
 
-fun new(vm: &Vm, object: Object): ObjectId { vm.universe.new(object) }
-fun get(vm: Vm, id: ObjectId): Object { vm.universe.get(id) }
-fun push(vm: &Vm, id: ObjectId) { vm.data_stack.&.push(id) }
-fun pop(vm: &Vm): ObjectId { vm.data_stack.&.pop() }
-fun call(universe: &Universe, fun_: MainFun, args: Slice[ObjectId]): ObjectId {
+fun push_int(vm: &Vm, int: Int) {
+  var int_bytes = Slice[Byte] {
+    data = int.&.to_address(),
+    len = 8,
+  }
+  for byte in int_bytes do vm.data_stack.&.push(byte)
+}
+fun pop_int(vm: &Vm): Int {
+  var value = vm.data_stack.get_ref(vm.data_stack.len - 8).to_address()
+    .to_reference[Int]().*
+  for i in 0..8 do vm.data_stack.&.pop()
+  value
+}
+fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
   var vm = Vm {
-    universe,
-    data_stack = list[ObjectId](),
-    call_stack = list[CallStackEntry](),
+    data_stack = initial_stack.to_list(),
+    call_stack = list[Address](),
   }
 
-  for arg in args do vm.&.push(arg)
-  vm.call_stack.&.push(CallStackEntry {
-    code = fun_.code, fun_ = fun_.id, instruction_index = 0
-  })
+  vm.call_stack.&.push(address)
   loop {
     var current_call = vm.call_stack.get_maybe_ref(vm.call_stack.len - 1) or {
       break
     }
-    var instructions = vm.get(current_call.code).code.unwrap()
-      .get(current_call.fun_).instructions
-    var instruction = instructions.get_maybe(current_call.instruction_index) or {
-      vm.call_stack.&.pop()
-      continue
-    }
-    current_call.instruction_index = current_call.instruction_index + 1
+    var instruction = current_call.*.to_reference[ByteCodeInstruction]().*
+    current_call += stride_size_of[ByteCodeInstruction]()
 
-    | println("running {instruction.debug()}")
+    stdout."data stack:"
+    for byte in vm.data_stack do stdout." {"{byte.radix(16)}".pad_left(2, #0)}"
+    stdout."\n"
+    println("running {instruction.debug()}")
+
     switch instruction
-    case push_object(object_id) vm.&.push(object_id)
-    case push_from_stack(offset) vm.&.push(vm.data_stack.get(vm.data_stack.len - 1 - offset))
-    case pop_n_below_top(n) {
-      var top = vm.&.pop()
-      for i in 0..n do vm.&.pop()
-      vm.&.push(top)
+    case push_8(byte) vm.data_stack.&.push(byte)
+    case push_64(word) vm.&.push_int(word)
+    case push_8_from_stack(offset) {
+      var byte = vm.data_stack.get(vm.data_stack.len - 1 - offset)
+      vm.data_stack.&.push(byte)
     }
-    case jump(index) current_call.instruction_index = index
+    case push_64_from_stack(offset) {
+      var start = vm.data_stack.len - 8 - offset
+      for i in 0..8 do vm.data_stack.&.push(vm.data_stack.get(start + i))
+    }
+    case pop_below_top(tuple) {
+      var skip = tuple.a
+      var amount = tuple.b
+      vm.data_stack.&.remove({vm.data_stack.len - skip - amount}..+amount)
+    }
+    case jump(address) current_call.* = address
     case jump_table(table) {
-      var symbol = vm.get(vm.data_stack.last()).tag.unwrap().symbol
-      current_call.instruction_index = table.get(symbol)
+      var byte = vm.data_stack.&.pop()
+      current_call.* = table.get(byte.to_int())
     }
-    case struct_(field_names) {
-      var num_fields = field_names.len
-      var field_values = uninitialized_slice[ObjectId](num_fields)
-      for i in 0..num_fields do field_values.get_ref(num_fields - 1 - i).* = vm.&.pop()
-
-      var fields = map[String, ObjectId]()
-      for field in zip(field_names.iter(), field_values.iter()) do
-        fields.&.put(field.a, field.b)
-      vm.&.push(vm.&.new(Object.struct_(fields)))
+    case lambda_call {
+      todo()
     }
-    case member(name) {
-      var field = vm.get(vm.&.pop()).struct_.unwrap().get(name)
-      vm.&.push(field)
+    case call(target) vm.call_stack.&.push(target)
+    case ret vm.call_stack.&.pop().ignore()
+    case add_64 vm.&.push_int(vm.&.pop_int() + vm.&.pop_int())
+    case sub_64 vm.&.push_int(vm.&.pop_int() - vm.&.pop_int())
+    case mul_64 vm.&.push_int(vm.&.pop_int() * vm.&.pop_int())
+    case div_64 vm.&.push_int(vm.&.pop_int() / vm.&.pop_int())
+    case mod_64 vm.&.push_int(vm.&.pop_int() % vm.&.pop_int())
+    case and_64 vm.&.push_int(vm.&.pop_int() & vm.&.pop_int())
+    case or_64 vm.&.push_int(or(vm.&.pop_int(), vm.&.pop_int()))
+    case xor_64 vm.&.push_int(vm.&.pop_int() ^ vm.&.pop_int())
+    case malloc {
+      var alignment = vm.data_stack.&.pop().to_int()
+      var size = vm.&.pop_int()
+      var address = malloc(size, alignment)
+      vm.&.push_int(address.cast[Address, Int]())
     }
-    case tag(tag) {
-      var symbol = tag.a
-      var num_args = tag.b
-      var args = uninitialized_slice[ObjectId](num_args)
-      for i in 0..num_args do args.get_ref(num_args - 1 - i).* = vm.&.pop()
-      vm.&.push(vm.&.new(Object.tag(TagObject{ symbol, args })))
+    case store_8 {
+      var byte = vm.data_stack.&.pop()
+      var address = vm.&.pop_int().cast[Int, Address]()
+      address.to_reference[Byte]().* = byte
     }
-    case untag {
-      var tag = vm.get(vm.&.pop()).tag.unwrap()
-      for arg in tag.args do vm.&.push(arg)
+    case store_64 {
+      var int = vm.&.pop_int()
+      var address = vm.&.pop_int().cast[Int, Address]()
+      address.to_reference[Int]().* = int
     }
-    case lambda(fun_and_captured) {
-      var fun_ = fun_and_captured.a
-      var num_captured = fun_and_captured.b
-      var captured = uninitialized_slice[ObjectId](num_captured)
-      for i in 0..num_captured do
-        captured.get_ref(num_captured - 1 - i).* = vm.&.pop()
-      vm.&.push(vm.&.new(Object.lambda(LambdaObject {
-        code = current_call.code, fun_, captured
-      })))
+    case load_8 {
+      var address = vm.&.pop_int().cast[Int, Address]()
+      vm.data_stack.&.push(address.to_reference[Byte]().*)
     }
-    case lambda_call(num_args) {
-      var lambda = vm.get(vm.&.pop()).lambda.unwrap()
-      var fun_ = vm.get(lambda.code).code.unwrap().get(lambda.fun_)
-
-      var args = uninitialized_slice[ObjectId](num_args)
-      for i in 0..num_args do args.get_ref(num_args - 1 - i).* = vm.&.pop()
-
-      for capture in lambda.captured do vm.&.push(capture)
-      for arg in args do vm.&.push(arg)
-
-      vm.call_stack.&.push(CallStackEntry {
-        code = lambda.code, fun_ = lambda.fun_, instruction_index = 0
-      })
-    }
-    case call(fun_)
-      vm.call_stack.&.push(CallStackEntry {
-        code = current_call.code, fun_, instruction_index = 0
-      })
-    case add_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a + b)))
-    }
-    case sub_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a - b)))
-    }
-    case mul_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a * b)))
-    }
-    case div_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a / b)))
-    }
-    case mod_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a % b)))
-    }
-    case and_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a & b)))
-    }
-    case or_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(or(a, b))))
-    }
-    case xor_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.int(a ^ b)))
-    }
-    case compare_ints {
-      var b = vm.get(vm.&.pop()).int.unwrap()
-      var a = vm.get(vm.&.pop()).int.unwrap()
-      vm.&.push(vm.&.new(Object.tag(TagObject {
-        symbol =
-          switch a <=> b
-          case less "Less"
-          case equal "Equal"
-          case greater "Greater",
-        args = empty_slice[ObjectId]()
-      })))
-    }
-    case concat_strings {
-      var b = vm.get(vm.&.pop()).string.unwrap()
-      var a = vm.get(vm.&.pop()).string.unwrap()
-      vm.&.push(vm.&.new(Object.string("{a}{b}")))
+    case load_64 {
+      var address = vm.&.pop_int().cast[Int, Address]()
+      vm.&.push_int(address.to_reference[Int]().*)
     }
     case crash {
-      var msg = vm.get(vm.&.pop()).string.unwrap()
+      var data = vm.&.pop_int().cast[Int, Address]()
+      var len = vm.&.pop_int()
+      var msg = String { data, len }
       panic("VM crashed: {msg}")
     }
   }
 
-  vm.data_stack.len == 1 or panic("more than one return value on the data stack")
-  vm.data_stack.get(0)
+  vm.data_stack.to_slice()
 }

@@ -7,7 +7,7 @@ import bacon.mar
 import toast.mar
 import egg.mar
 import yogurt.mar
-import universe.mar
+| import universe.mar
 import vm.mar
 
 | Compiler Stages:
@@ -51,16 +51,33 @@ fun main(): Never {
   | write_file("test.c", c.code.bytes())
   | eprintln("\nWrote C code to test.c")
 
-  eprintln("Compiling to byte code")
-  var universe = big_bang()
-  var main = yogurt.compile(universe.&)
-  | eprintln("Compiled to byte code:\n{universe}")
+  var hello = "Hello, panic!"
+  var byte_code = uninitialized_slice[ByteCodeInstruction](10)
+  byte_code.&.get_ref(0).* = ByteCodeInstruction.push_64(hello.len)
+  byte_code.&.get_ref(1).* = ByteCodeInstruction.push_64(hello.data.cast[Address, Int]())
+  byte_code.&.get_ref(2).* = ByteCodeInstruction.crash
+  byte_code.&.get_ref(3).* = ByteCodeInstruction.push_64_from_stack(0)
+  byte_code.&.get_ref(4).* = ByteCodeInstruction.push_8(42.lower_byte())
+  byte_code.&.get_ref(5).* = ByteCodeInstruction.store_8
+  byte_code.&.get_ref(6).* = ByteCodeInstruction.load_8
+  byte_code.&.get_ref(7).* = ByteCodeInstruction.ret
 
-  eprintln("Running")
-  var five = universe.&.new(Object.int(5))
-  var return_value = universe.&.call(main, list(five).to_slice())
-  stdout.write_deep(return_value, universe)
+  var result = byte_code.data.call(empty_slice[Byte]())
+  var result = result.data.to_reference[Address]().*.to_reference[Int]().*
+  print("Result: {result.radix(16)}")
+  | for byte in result do print(" {byte}")
   println()
+
+  | eprintln("Compiling to byte code")
+  | var universe = big_bang()
+  | var main = yogurt.compile(universe.&)
+  | | eprintln("Compiled to byte code:\n{universe}")
+
+  | eprintln("Running")
+  | var five = universe.&.new(Object.int(5))
+  | var return_value = universe.&.call(main, list(five).to_slice())
+  | stdout.write_deep(return_value, universe)
+  | println()
   | println(universe)
 
   exit(0)
