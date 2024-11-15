@@ -71,6 +71,36 @@ fun write[W](writer: W, vm: Vm) {
   writer."\ncall stack:"
   for call in vm.call_stack do writer." {call}"
 }
+fun write[W](writer: W, instruction: ByteCodeInstruction) {
+  switch instruction
+  case push_8(byte) writer."push_8 {byte}"
+  case push_64(int) writer."push_64 {int}"
+  case push_8_from_stack(offset) writer."push_8_from_stack {offset}"
+  case push_64_from_stack(offset) writer."push_64_from_stack {offset}"
+  case pop_below_top(tuple) writer."pop_below_top {tuple.a} {tuple.b}"
+  case jump(target) writer."jump {target}"
+  case jump_table(table) {
+    writer."jump_table"
+    for target in table do writer." {target}"
+  }
+  case lambda_call(target) writer."lambda_call {target}"
+  case call(target) writer."call {target}"
+  case ret writer."ret"
+  case add_64 writer."add_64"
+  case sub_64 writer."sub_64"
+  case mul_64 writer."mul_64"
+  case div_64 writer."div_64"
+  case mod_64 writer."mod_64"
+  case and_64 writer."and_64"
+  case or_64 writer."or_64"
+  case xor_64 writer."xor_64"
+  case malloc writer."malloc"
+  case store_8 writer."store_8"
+  case store_64 writer."store_64"
+  case load_8 writer."load_8"
+  case load_64 writer."load_64"
+  case crash writer."crash"
+}
 
 fun push_int(vm: &Vm, int: Int) {
   var int_bytes = Slice[Byte] {

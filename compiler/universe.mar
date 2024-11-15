@@ -1,386 +1,411 @@
-| The Universe and Byte Code  
-| All Plum objects (including source code) are owned by a universe. First, you
-| create an empty universe using the big_bang function. Only then can you
-| compile code into that universe. You can then call the compiled functions.
+| Converting Yogurt to Byte Code  
+|
+| Yogurt is converted to byte code for a low-level virtual machine (not LLVM).
+| The byte code and VM can be found in vm.mar. This file contains the code that
+| compiles Yogurt to byte code.
+|
+| A big question is how to represent values. Currently, we use the
+| memory_layout.mar file to calculate reasonably efficient memory layouts for
+| all types. If possible, we save values unboxed and on the stack.
+|
+| When you call a function, the function expects the arguments to be on the
+| stack. Here's an example function:
+|
+| foo a: Byte b: Int c: Byte -> Int =
+|   a + 5
+|
+| Its Yogurt looks like this:
+|
+| foo Byte Int Byte: @0 @1 @2
+|   @3: Int = comptime 5
+|   @4: Int = call "+ Int Int" @1 @3
+|   @4
+|
+| The calling convention is this:
+| - When a function runs, the stack has to be aligned to 8 bytes.
+| - All arguments to the function should be on the stack as if they were layed
+|   out in a struct.
+| - After a function returns, the arguments should have been consumed from the
+|   stack and replaced by the return value.
+|
+| For a call "foo 1 2 3", this would be the stack:
+|
+| @1--------------------- @0 @2 padding----------
+| 02 00 00 00 00 00 00 00 01 03 00 00 00 00 00 00
+|
+| Each local expression (in our case, @3 and @4) are expected to be on the stack
+| after they are executed. For example, after the "comptime 5":
+|
+| @1--------------------- @0 @2 padding---------- @3---------------------
+| 02 00 00 00 00 00 00 00 01 03 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+|
+| The call to + first pushes all arguments to the stack:
+|
+| 02 00 00 00 00 00 00 00 01 03 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+| 02 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+|
+| Then, it calls +. After + completes, the stack will look like this:
+|
+| 02 00 00 00 00 00 00 00 01 03 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+| 07 00 00 00 00 00 00 00
+|
+| Then, foo cleans up the arguments so that the stack is this:
+|
+| 07 00 00 00 00 00 00 00
 
 import plum.mar
 
-struct Universe { objects: List[Object] }
+var padding_byte = 16#aa.lower_byte()
 
-struct ObjectId { int: Int } | index in the objects list
-enum Object {
-  int: Int,
-  string: String,
-  struct_: Map[String, ObjectId],
-  tag: TagObject,
-  lambda: LambdaObject,
-  code: CodeObject, | code from one compilation unit
-}
-struct TagObject { symbol: String, args: Slice[ObjectId] }
-struct LambdaObject { code: ObjectId, fun_: FunId, captured: Slice[ObjectId] }
-struct CodeObject { funs: List[FunCode] }
+fun compile(yogurt: Yogurt): Address {
+  var instructions = list[ByteCodeInstruction]()
+  instructions.&.reserve_uninitialized(200) | TODO
 
-struct FunId { int: Int } | index in a code's functions list
-struct FunCode { name: String, instructions: Slice[ByteCodeInstruction] }
-enum ByteCodeInstruction {
-  push_object: ObjectId,
-  push_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
-  pop_n_below_top: Int, | pops n objects, skipping the top object
-  jump: Int, | jumps to the given instruction index inside this function
-  jump_table: Map[String, Int], | peeks at the top value (a tag). depending on the symbol, jumps to different instruction indices
-  struct_: List[String], | pops the same number of values, pushes a struct
-  member: String, | pops a struct, pushes its member with the given name
-  tag: Tuple2[String, Int], | symbol and number of arguments
-  untag, | consumes a tag, pushes all its args on the stack
-  lambda: Tuple2[FunId, Int], | function and number of captured variables. consumes num captured, pushes a lambda
-  lambda_call: Int, | contains num args. pops a lambda from the stack, pops args. pushes captured, args. calls to function start
-  call: FunId, | calls another function from the same compilation unit
-  add_ints,
-  sub_ints,
-  mul_ints,
-  div_ints,
-  mod_ints,
-  and_ints,
-  or_ints,
-  xor_ints,
-  compare_ints,
-  concat_strings,
-  crash,
-}
+  var signature_to_address = map[YogurtSignature, Address]()
+  var patches = list[Tuple2[&ByteCodeInstruction, YogurtSignature]]()
 
-fun big_bang(): Universe { Universe { objects = list[Object]() } }
-
-fun new(universe: &Universe, object: Object): ObjectId {
-  var id = universe.objects.len
-  universe.objects.&.push(object)
-  ObjectId { int = id }
-}
-fun get(universe: Universe, id: ObjectId): Object {
-  universe.objects.get(id.int)
-}
-fun get(code: CodeObject, id: FunId): FunCode { code.funs.get(id.int) }
-
-fun write[W](writer: W, universe: Universe) {
-  writer."Universe:"
-  for object in universe.objects.iter().enumerate() do {
-    writer."\n{ObjectId { int = object.index }}: "
-    writer.write(object.item)
-  }
-}
-fun write[W](writer: W, id: ObjectId) { writer."#{id.int}" }
-fun write[W](writer: W, object: Object) {
-  switch object
-  case int(int) writer."{int}"
-  case string(string) writer."{string.debug()}"
-  case struct_(struct_) {
-    writer."(&"
-    for field in struct_ do writer." {field.key}: {field.value}"
-    writer.")"
-  }
-  case tag(tag) {
-    writer."({tag.symbol}"
-    for arg in tag.args do writer." {arg}"
-    writer.")"
-  }
-  case lambda(lambda) {
-    writer."\\ {lambda.code} {lambda.fun_} [capturing"
-    for capture in lambda.captured do writer." {capture}"
-    writer."]"
-  }
-  case code(code) writer."{code}"
-}
-fun write_deep[W](writer: W, id: ObjectId, universe: Universe) {
-  switch universe.get(id)
-  case int(int) writer."{int}"
-  case string(string) writer."{string.debug()}"
-  case struct_(struct_) {
-    writer."(&"
-    for field in struct_ do {
-      writer." {field.key}: "
-      writer.write_deep(field.value, universe)
-    }
-    writer.")"
-  }
-  case tag(tag) {
-    writer."({tag.symbol}"
-    for arg in tag.args do {
-      writer." "
-      writer.write_deep(arg, universe)
-    }
-    writer.")"
-  }
-  case lambda(lambda) {
-    writer."\\ {lambda.code} {lambda.fun_} [capturing"
-    for capture in lambda.captured do writer." {capture}"
-    writer."]"
-  }
-  case code(code) writer."{code}"
-}
-fun write[W](writer: W, code: CodeObject) {
-  for fun_ in code.funs.iter().enumerate() do {
-    writer."\n  {FunId { int = fun_.index }} ({fun_.item.name}):"
-    for instruction in fun_.item.instructions.iter().enumerate() do {
-      writer."\n    {"{instruction.index}".pad_left(3)} | {instruction.item}"
-    }
-  }
-}
-fun write[W](writer: W, id: FunId) { writer."fun-{id.int}" }
-fun write[W](writer: W, instruction: ByteCodeInstruction) {
-  switch instruction
-  case push_object(id) writer."push {id}"
-  case push_from_stack(n) writer."push top - {n}"
-  case pop_n_below_top(n) writer."pop {n} below top"
-  case jump(index) writer."jump to {index}"
-  case jump_table(table) {
-    writer."jump to:"
-    for entry in table do writer."\n        |   {entry.key} -> {entry.value}"
-  }
-  case struct_(field_names) {
-    writer."struct with fields"
-    for name in field_names do writer." {name}"
-  }
-  case member(name) writer."get member {name}"
-  case tag(tag) writer."tag {tag.a} with {tag.b} args"
-  case untag writer."untag"
-  case lambda(lambda) writer."lambda {lambda.a} with {lambda.b} captured"
-  case lambda_call writer."lambda_call"
-  case call(function) writer."call {function}"
-  case add_ints writer."add_ints"
-  case sub_ints writer."sub_ints"
-  case mul_ints writer."mul_ints"
-  case div_ints writer."div_ints"
-  case mod_ints writer."mod_ints"
-  case and_ints writer."and_ints"
-  case or_ints writer."or_ints"
-  case xor_ints writer."xor_ints"
-  case compare_ints writer."compare_ints"
-  case concat_strings writer."concat_strings"
-  case crash writer."crash"
-}
-
-struct MainFun { code: ObjectId, id: FunId }
-
-fun compile(yogurt: Yogurt, universe: &Universe): MainFun {
-  var code = universe.new(Object.int(-1)) | placeholder
-
-  var signature_to_id = map[YogurtSignature, FunId]()
-  for fun_ in yogurt.funs.iter().enumerate() do
-    signature_to_id.&.put(fun_.item.key, FunId { int = fun_.index }) | placeholders
-
-  var funs = uninitialized_list[FunCode](yogurt.funs.size)
   for fun_ in yogurt.funs do {
     var signature = fun_.key
     var fun_ = fun_.value
-    var id = signature_to_id.get(signature)
-    funs.&.get_ref(id.int).* = fun_.compile(signature, code, universe, signature_to_id)
+    signature_to_address.&.put(
+      signature, instructions.data.get_ref(instructions.len).to_address()
+    )
+    fun_.compile(signature, yogurt, instructions.&, patches.&)
   }
 
-  universe.objects.get_ref(code.int).* = Object.code(CodeObject { funs })
+  for patch in patches do
+    patch.a.* = ByteCodeInstruction.call(signature_to_address.get(patch.b))
 
-  MainFun {
-    code,
-    id = signature_to_id.get(yogurt_signature(
-      "main",
-      list(YogurtParam.runtime(PlumType.primitive("Int"))).to_slice()
-    ))
-  }
+  signature_to_address.get(yogurt_signature(
+    "main",
+    list(YogurtParam.runtime(PlumType.primitive("Int"))).to_slice()
+  ))
 }
 fun compile(
-  fun_: YogurtFun, signature: YogurtSignature,
-  code: ObjectId, universe: &Universe, signature_to_id: Map[YogurtSignature, FunId]
-): FunCode {
-  var stack_model = list[YogurtId]()
-  if fun_.captured is some(captured) then
-    for capture in captured do stack_model.&.push(capture)
-  for param in fun_.body.params do stack_model.&.push(param)
-  var instructions = list[ByteCodeInstruction]()
-
-  fun_.body.compile(
-    instructions.&, stack_model.&, fun_, code, universe, signature_to_id
-  )
-  if fun_.captured is some(captured) then
-    instructions.&.push(ByteCodeInstruction.pop_n_below_top(captured.len))
-
-  FunCode { name = signature.str, instructions = instructions.to_slice() }
-}
-fun compile(
-  body: YogurtBody,
+  fun_: YogurtFun, signature: YogurtSignature, yogurt: Yogurt,
   instructions: &List[ByteCodeInstruction],
-  stack_model: &List[YogurtId],
-  fun_: YogurtFun,
-  code: ObjectId,
-  universe: &Universe,
-  signature_to_id: Map[YogurtSignature, FunId],
+  patches: &List[Tuple2[&ByteCodeInstruction, YogurtSignature]],
 ) {
-  for id in body.exprs do {
-    var expr = fun_.get(id)
-    switch expr.op
-    case param panic("param should not exist in body")
-    case uninitialized {}
-    case comptime(value)
-      instructions.push(ByteCodeInstruction.push_object(
-        value.to_object(universe, code, signature_to_id)
-      ))
-    case struct_(struct_) {
-      var fields = list[String]()
-      for field in struct_ do fields.&.push(field.key)
-      for field in fields do {
-        var value = struct_.get(field)
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(value)
-        ))
-        stack_model.push(value)
-      }
-      instructions.push(ByteCodeInstruction.struct_(fields))
-      stack_model.pop(fields.len)
-    }
-    case member(member) {
-      instructions.push(ByteCodeInstruction.push_from_stack(
-        stack_model.find_distance_from_top(member.of)
-      ))
-      instructions.push(ByteCodeInstruction.member(member.name))
-    }
-    case tag(tag) {
-      for arg in tag.args do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(arg)
-        ))
-        stack_model.push(arg)
-      }
-      instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
-      stack_model.pop(tag.args.len)
-    }
-    case switch_(switch_) {
-      instructions.push(ByteCodeInstruction.push_from_stack(
-        stack_model.find_distance_from_top(switch_.condition)
-      ))
-      var variants = fun_.get(switch_.condition).type.enum_.unwrap()
-
-      var jump_table_index = instructions.len
-      instructions.push(ByteCodeInstruction.jump_table(map[String, Int]()))  | placeholder
-
-      var table = map[String, Int]()
-      var end_jumps = list[Int]()
-      for case_ in switch_.cases do {
-        table.&.put(case_.key, instructions.len)
-
-        var stack_len_before = stack_model.len
-        instructions.push(ByteCodeInstruction.untag)
-        for param in case_.value.params do stack_model.push(param)
-        case_.value.compile(instructions, stack_model, fun_, code, universe, signature_to_id)
-        stack_model.pop().ignore()
-        var stack_len_after = stack_model.len
-        stack_len_before == stack_len_after or panic("stack len mismatch ({stack_len_before} and {stack_len_after})")
-
-        end_jumps.&.push(instructions.len)
-        instructions.push(ByteCodeInstruction.jump(0))  | placeholder
-      }
-      var end = instructions.len
-      for jump in end_jumps do
-        instructions.get_ref(jump).* = ByteCodeInstruction.jump(end)
-      instructions.get_ref(jump_table_index).* = ByteCodeInstruction.jump_table(table)
-    }
-    case lambda(lambda) {
-      for capture in lambda.captures do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(capture)
-        ))
-        stack_model.push(capture)
-      }
-      var fun_ = signature_to_id.get(lambda.function)
-      instructions.push(ByteCodeInstruction.lambda(tuple(fun_, lambda.captures.len)))
-      stack_model.pop(lambda.captures.len)
-    }
-    case lambda_call(call) {
-      for arg in call.args do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(arg)
-        ))
-        stack_model.push(arg)
-      }
-      instructions.push(ByteCodeInstruction.push_from_stack(
-        stack_model.find_distance_from_top(call.lambda)
-      ))
-      stack_model.push(call.lambda)
-      instructions.push(ByteCodeInstruction.lambda_call(call.args.len))
-      stack_model.pop(call.args.len + 1)
-    }
-    case call(call) {
-      for arg in call.args do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(arg)
-        ))
-        stack_model.push(arg)
-      }
-      var fun_ = signature_to_id.get(call.receiver)
-      instructions.push(ByteCodeInstruction.call(fun_))
-      stack_model.pop(call.args.len)
-    }
-    case instruction(instruction) {
-      for arg in instruction.args do {
-        instructions.push(ByteCodeInstruction.push_from_stack(
-          stack_model.find_distance_from_top(arg)
-        ))
-        stack_model.push(arg)
-      }
-
-      switch instruction.instruction
-      case add_ints instructions.push(ByteCodeInstruction.add_ints)
-      case sub_ints instructions.push(ByteCodeInstruction.sub_ints)
-      case mul_ints instructions.push(ByteCodeInstruction.mul_ints)
-      case div_ints instructions.push(ByteCodeInstruction.div_ints)
-      case mod_ints instructions.push(ByteCodeInstruction.mod_ints)
-      case and_ints instructions.push(ByteCodeInstruction.and_ints)
-      case or_ints instructions.push(ByteCodeInstruction.or_ints)
-      case xor_ints instructions.push(ByteCodeInstruction.xor_ints)
-      case compare_ints instructions.push(ByteCodeInstruction.compare_ints)
-      case concat_strings instructions.push(ByteCodeInstruction.concat_strings)
-      case crash instructions.push(ByteCodeInstruction.crash)
-
-      stack_model.pop(instruction.args.len)
-    }
-    stack_model.&.push(id)
+  var builder = ByteCodeBuilder {
+    instructions, stack_mapping = map[YogurtId, Int](), stack_size = 0
   }
-  instructions.push(ByteCodeInstruction.push_from_stack(
-    stack_model.find_distance_from_top(body.returns)
-  ))
-  instructions.push(ByteCodeInstruction.pop_n_below_top(
-    body.params.len + body.exprs.len
-  ))
-  stack_model.pop(body.params.len + body.exprs.len)
-  stack_model.push(body.returns)
+
+  { | Lay out parameters on the stack.
+    var param_layouts = list[MemoryLayout]()
+    for param in fun_.body.params do
+      param_layouts.&.push(fun_.get(param).type.memory_layout())
+    var layout = param_layouts.to_slice().layout_efficiently()
+    for param in fun_.body.params.iter().enumerate() do
+      builder.&.add_mapping(param.item, layout.input_to_offset.get(param.index))
+    builder.stack_size = layout.size
+    eprintln("param mapping: {builder.stack_mapping}")
+  }
+
+  if fun_.captured is some(captured) then {
+    todo("handle closures")
+    | for capture in captured do builder.&.push(capture)
+  }
+
+  fun_.body.compile(builder.&, fun_, yogurt, patches)
+
+  | TODO: think about this
+  | if fun_.captured is some(captured) then
+  |   instructions.&.push(ByteCodeInstruction.pop_n_below_top(captured.len))
 }
-fun find_distance_from_top(stack_model: List[YogurtId], id: YogurtId): Int {
-  for entry in stack_model.to_slice().rev_iter().enumerate() do
-    if entry.item == id then return entry.index
-  panic("{id} not on stack {stack_model}")
+
+| Byte Code Builder  
+| In order to make it easy to generate byte code and for this to not get out of
+| sync with our comptime model of the stack, we have a ByteCodeBuilder. Each
+| instruction has a corresponding function that appends the instruction to the
+| instruction buffer and also updates the stack model.
+
+struct ByteCodeBuilder {
+  instructions: &List[ByteCodeInstruction],
+  stack_mapping: Map[YogurtId, Int],
+  stack_size: Int,
 }
-fun to_object(
-  value: YogurtValue, universe: &Universe, code: ObjectId,
-  signature_to_id: Map[YogurtSignature, FunId],
-): ObjectId {
+fun add_mapping(builder: &ByteCodeBuilder, id: YogurtId, offset: Int) {
+  builder.stack_mapping.&.put(id, offset)
+}
+fun find_distance_from_top(builder: ByteCodeBuilder, id: YogurtId): Int {
+  builder.stack_size - builder.stack_mapping.get(id)
+}
+
+fun emit(builder: &ByteCodeBuilder, instruction: ByteCodeInstruction) {
+  eprintln("Emitting {instruction}")
+  builder.instructions.push(instruction)
+  builder.stack_size = builder.stack_size + instruction.stack_size_diff()
+}
+fun stack_size_diff(instruction: ByteCodeInstruction): Int {
+  switch instruction
+  case push_8 1
+  case push_64 8
+  case push_8_from_stack 1
+  case push_64_from_stack 8
+  case pop_below_top(tuple) 0 - tuple.b
+  case jump todo("stack size of jump")
+  case jump_table todo("stack size of jump table")
+  case lambda_call todo("stack size of lambda call")
+  case call 0 | Note: You need to udpate this manually
+  case ret 0
+  case add_64 -8
+  case sub_64 -8
+  case mul_64 -8
+  case div_64 -8
+  case mod_64 -8
+  case and_64 -8
+  case or_64 -8
+  case xor_64 -8
+  case malloc -1
+  case store_8 -9
+  case store_64 -16
+  case load_8 -7
+  case load_64 0
+  case crash todo("stack size of crash")
+}
+
+fun push_padding(builder: &ByteCodeBuilder, amount: Int) {
+  for i in 0..amount do builder.emit(ByteCodeInstruction.push_8(padding_byte))
+}
+fun align_to(builder: &ByteCodeBuilder, alignment: Int) {
+  builder.push_padding(
+    builder.stack_size.round_up_to_multiple_of(alignment) - builder.stack_size
+  )
+}
+fun copy_from_stack(builder: &ByteCodeBuilder, offset: Int, size: Int) {
+  if size > offset then
+    panic("called copy_from_stack with offset {offset}, but size {size}")
+  loop if size < 8 then break else {
+    builder.emit(ByteCodeInstruction.push_64_from_stack(offset - 8))
+    size = size - 8
+  }
+  for byte in 0..size do
+    builder.emit(ByteCodeInstruction.push_8_from_stack(offset - 1))
+}
+fun copy_from_stack(builder: &ByteCodeBuilder, id: YogurtId, size: Int) {
+  builder.copy_from_stack(builder.find_distance_from_top(id), size)
+}
+fun push_value(builder: &ByteCodeBuilder, value: YogurtValue) {
   switch value.kind
-  case int(int) universe.new(Object.int(int))
-  case string(string) universe.new(Object.string(string))
+  case int(int) {
+    | 5
+    |
+    | becomes:
+    |
+    | push_64 5  | 05 00 00 00 00 00 00 00
+    builder.emit(ByteCodeInstruction.push_64(int))
+  }
+  case string(string) {
+    | "hi"
+    |
+    | becomes:
+    |
+    | push_64 ...           | 12 34 56 78 00 00 00 00
+    | push_64 2             | 12 34 56 78 00 00 00 00 02 00 00 00 00 00 00 00
+    builder.emit(ByteCodeInstruction.push_64(string.data.to_int()))
+    builder.emit(ByteCodeInstruction.push_64(string.len))
+  }
   case struct_(struct_) {
-    var fields = map[String, ObjectId]()
-    for field in struct_ do
-      fields.&.put(field.key, field.value.to_object(universe, code, signature_to_id))
-    universe.new(Object.struct_(fields))
+    todo()
+    | var fields = map[String, ObjectId]()
+    | for field in struct_ do
+    |   fields.&.put(field.key, field.value.to_instructions(universe, code, signature_to_address))
+    | universe.new(Object.struct_(fields))
   }
   case tag(tag) {
-    var args = list[ObjectId]()
-    for arg in tag.b do args.&.push(arg.to_object(universe, code, signature_to_id))
-    universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
+    todo()
+    | var args = list[ObjectId]()
+    | for arg in tag.b do args.&.push(arg.to_instructions(universe, code, signature_to_address))
+    | universe.new(Object.tag(TagObject { symbol = tag.a, args = args.to_slice() }))
   }
   case lambda(lambda) {
-    var captured = list[ObjectId]()
-    for capture in lambda.captures do
-      captured.&.push(capture.to_object(universe, code, signature_to_id))
-    universe.new(Object.lambda(LambdaObject {
-      code, fun_ = signature_to_id.get(lambda.function),
-      captured = captured.to_slice()
-    }))
+    todo()
+    | var captured = list[ObjectId]()
+    | for capture in lambda.captures do
+    |   captured.&.push(capture.to_instructions(universe, code, signature_to_address))
+    | universe.new(Object.lambda(LambdaObject {
+    |   code, fun_ = signature_to_address.get(lambda.function),
+    |   captured = captured.to_slice()
+    | }))
   }
-  case type(type) universe.new(Object.string("{type}"))
+  case type(type) {
+    todo()
+    | universe.new(Object.string("{type}"))
+  }
+}
+
+fun compile(
+  body: YogurtBody,
+  builder: &ByteCodeBuilder,
+  fun_: YogurtFun,
+  yogurt: Yogurt,
+  patches: &List[Tuple2[&ByteCodeInstruction, YogurtSignature]],
+) {
+  var stack_size_at_body_start = builder.stack_size
+
+  for id in body.exprs do {
+    var expr = fun_.get(id)
+    var type = expr.type
+    var layout = type.memory_layout()
+    builder.align_to(layout.alignment)
+    builder.add_mapping(id, builder.stack_size)
+
+    switch expr.op
+    case param panic("param should not exist in body")
+    case uninitialized builder.push_padding(layout.size)
+    case comptime(value) builder.push_value(value)
+    case struct_(struct_) {
+      todo("struct")
+      | var fields = list[String]()
+      | for field in struct_ do fields.&.push(field.key)
+      | for field in fields do {
+      |   var value = struct_.get(field)
+      |   instructions.push(ByteCodeInstruction.push_from_stack(
+      |     builder.find_distance_from_top(value)
+      |   ))
+      |   builder.push(value)
+      | }
+      | instructions.push(ByteCodeInstruction.struct_(fields))
+      | builder.pop(fields.len)
+    }
+    case member(member) {
+      todo("member")
+      | instructions.push(ByteCodeInstruction.push_from_stack(
+      |   builder.find_distance_from_top(member.of)
+      | ))
+      | instructions.push(ByteCodeInstruction.member(member.name))
+    }
+    case tag(tag) {
+      todo("tag")
+      | for arg in tag.args do {
+      |   instructions.push(ByteCodeInstruction.push_from_stack(
+      |     builder.find_distance_from_top(arg)
+      |   ))
+      |   builder.push(arg)
+      | }
+      | instructions.push(ByteCodeInstruction.tag(tuple(tag.symbol, tag.args.len)))
+      | builder.pop(tag.args.len)
+    }
+    case switch_(switch_) {
+      todo("switch")
+      | instructions.push(ByteCodeInstruction.push_from_stack(
+      |   builder.find_distance_from_top(switch_.condition)
+      | ))
+      | var variants = fun_.get(switch_.condition).type.enum_.unwrap()
+
+      | var jump_table_index = instructions.len
+      | instructions.push(ByteCodeInstruction.jump_table(map[String, Int]()))  | placeholder
+
+      | var table = map[String, Int]()
+      | var end_jumps = list[Int]()
+      | for case_ in switch_.cases do {
+      |   table.&.put(case_.key, instructions.len)
+
+      |   var stack_len_before = builder.len
+      |   instructions.push(ByteCodeInstruction.untag)
+      |   for param in case_.value.params do builder.push(param)
+      |   case_.value.compile(instructions, builder, fun_, code, universe, signature_to_address)
+      |   builder.pop().ignore()
+      |   var stack_len_after = builder.len
+      |   stack_len_before == stack_len_after or panic("stack len mismatch ({stack_len_before} and {stack_len_after})")
+
+      |   end_jumps.&.push(instructions.len)
+      |   instructions.push(ByteCodeInstruction.jump(0))  | placeholder
+      | }
+      | var end = instructions.len
+      | for jump in end_jumps do
+      |   instructions.get_ref(jump).* = ByteCodeInstruction.jump(end)
+      | instructions.get_ref(jump_table_index).* = ByteCodeInstruction.jump_table(table)
+    }
+    case lambda(lambda) {
+      todo("lambda")
+      | for capture in lambda.captures do {
+      |   instructions.push(ByteCodeInstruction.push_from_stack(
+      |     builder.find_distance_from_top(capture)
+      |   ))
+      |   builder.push(capture)
+      | }
+      | var fun_ = signature_to_address.get(lambda.function)
+      | instructions.push(ByteCodeInstruction.lambda(tuple(fun_, lambda.captures.len)))
+      | builder.pop(lambda.captures.len)
+    }
+    case lambda_call(call) {
+      todo("lambda call")
+      | for arg in call.args do {
+      |   instructions.push(ByteCodeInstruction.push_from_stack(
+      |     builder.find_distance_from_top(arg)
+      |   ))
+      |   builder.push(arg)
+      | }
+      | instructions.push(ByteCodeInstruction.push_from_stack(
+      |   builder.find_distance_from_top(call.lambda)
+      | ))
+      | builder.push(call.lambda)
+      | instructions.push(ByteCodeInstruction.lambda_call(call.args.len))
+      | builder.pop(call.args.len + 1)
+    }
+    case call(call) {
+      | Lay out arguments.
+      var arg_layouts = list[MemoryLayout]()
+      for arg in call.args do
+        arg_layouts.&.push(fun_.get(arg).type.memory_layout())
+      var layout = arg_layouts.to_slice().layout_efficiently()
+
+      | Copy them from further back on the stack to here.
+      for index in layout.inputs_sorted_by_offset do {
+        var arg = call.args.get(index)
+        var layout = arg_layouts.get(index)
+        builder.copy_from_stack(arg, layout.size)
+      }
+      builder.&.align_to(8)
+
+      builder.emit(ByteCodeInstruction.call(null))
+      patches.push(tuple(
+        builder.instructions.get_ref(builder.instructions.len - 1),
+        call.receiver
+      ))
+      builder.stack_size =
+        builder.stack_size
+        - layout.size
+        + yogurt.funs.get(call.receiver).return_type().memory_layout().size
+    }
+    case instruction(instruction) {
+      for arg in instruction.args do
+        builder.copy_from_stack(arg, fun_.get(arg).type.memory_layout().size)
+
+      switch instruction.instruction
+      case add_ints builder.emit(ByteCodeInstruction.add_64)
+      case sub_ints builder.emit(ByteCodeInstruction.sub_64)
+      case mul_ints builder.emit(ByteCodeInstruction.mul_64)
+      case div_ints builder.emit(ByteCodeInstruction.div_64)
+      case mod_ints builder.emit(ByteCodeInstruction.mod_64)
+      case compare_ints todo("compare_ints")
+      case and_ints builder.emit(ByteCodeInstruction.and_64)
+      case or_ints builder.emit(ByteCodeInstruction.or_64)
+      case xor_ints builder.emit(ByteCodeInstruction.xor_64)
+      case concat_strings todo("concat_strings")
+      case crash {
+        todo("crash args")
+        builder.emit(ByteCodeInstruction.crash)
+      }
+    }
+  }
+
+  | Function postamble.
+
+  var size_of_params = {
+    var param_layouts = list[MemoryLayout]()
+    for param in body.params do
+      param_layouts.&.push(fun_.get(param).type.memory_layout())
+    param_layouts.to_slice().layout_efficiently().size
+  }
+  var size_of_locals = builder.stack_size - stack_size_at_body_start
+  var return_value_size = fun_.get(body.returns).type.memory_layout().size
+
+  eprintln("mapping: {builder.stack_mapping} size: {builder.stack_size}")
+  builder.copy_from_stack(body.returns, return_value_size)
+  builder.emit(ByteCodeInstruction.pop_below_top(tuple(
+    return_value_size, size_of_params + size_of_locals
+  )))
+  builder.emit(ByteCodeInstruction.ret)
 }

@@ -1,0 +1,157 @@
+import plum.mar
+
+struct MemoryLayout { size: Int, alignment: Int, kind: MemoryLayoutKind }
+enum MemoryLayoutKind {
+  primitive,
+  struct_: StructLayout,
+  enum_: EnumLayout,
+}
+struct StructLayout {
+  field_to_offset: Map[String, Int],
+  field_to_layout: Map[String, MemoryLayout],
+  fields_sorted_by_offset: Slice[String],
+}
+struct EnumLayout {
+  variants: Map[String, VariantLayout],
+  tag_size: Int,
+  tag_offset: Int,
+}
+struct VariantLayout {
+  arg_offsets: Slice[Int],
+  arg_layouts:Slice[MemoryLayout],
+  args_sorted_by_offset: Slice[Int],
+}
+
+struct OffsetAndLayout { offset: Int, layout: MemoryLayout }
+
+fun memory_layout(type: PlumType): MemoryLayout {
+  switch type
+  case primitive(name) {
+    if name == "Int" then
+      MemoryLayout { size = 8, alignment = 8, kind = MemoryLayoutKind.primitive }
+    else if name == "String" then
+      MemoryLayout { size = 16, alignment = 8, kind = MemoryLayoutKind.primitive }
+    else
+      todo("handle mem layouting primitive type {name}")
+  }
+  case never MemoryLayout { size = 0, alignment = 0, kind = MemoryLayoutKind.primitive }
+  case struct_(struct_) {
+    var fields = list[String]()
+    for field in struct_ do fields.&.push(field.key)
+
+    | Layout the fields.
+    var field_layouts = list[MemoryLayout]()
+    for field in fields do
+      field_layouts.&.push(struct_.get(field).memory_layout())
+    var layout = field_layouts.to_slice().layout_efficiently()
+
+    | Calculate derived info.
+    var field_to_offset = map[String, Int]()
+    var field_to_layout = map[String, MemoryLayout]()
+    for field in fields.iter().enumerate() do {
+      var index = field.index
+      var field = field.item
+      field_to_offset.&.put(field, layout.input_to_offset.get(index))
+      field_to_layout.&.put(field, field_layouts.get(index))
+    }
+    var fields_sorted_by_offset = list[String]()
+    for index in layout.inputs_sorted_by_offset do
+      fields_sorted_by_offset.&.push(fields.get(index))
+
+    MemoryLayout {
+      size = layout.size,
+      alignment = layout.alignment,
+      kind = MemoryLayoutKind.struct_(StructLayout {
+        field_to_offset, field_to_layout,
+        fields_sorted_by_offset = fields_sorted_by_offset.to_slice()
+      }),
+    }
+  }
+  case enum_(enum_) {
+    var payload_size = 0
+    var payload_alignment = 1
+    var variants = map[String, VariantLayout]()
+    for variant in enum_ do {
+      | Layout the args.
+      var arg_layouts = list[MemoryLayout]()
+      for arg in variant.value do
+        arg_layouts.&.push(
+          if arg.is_recursive(1)
+          then MemoryLayout {
+            size = 8, alignment = 8, kind = MemoryLayoutKind.primitive
+          }
+          else arg.memory_layout()
+        )
+      var layout = arg_layouts.to_slice().layout_efficiently()
+
+      payload_size = max(payload_size, layout.size)
+      payload_alignment = max(payload_alignment, layout.alignment)
+      variants.&.put(variant.key, VariantLayout {
+        arg_offsets = layout.input_to_offset,
+        arg_layouts = arg_layouts.to_slice(),
+        args_sorted_by_offset = layout.inputs_sorted_by_offset,
+      })
+    }
+
+    var tag_offset = payload_size
+    var tag_size = if enum_.size > 1 then 1 else 0
+
+    MemoryLayout {
+      size = tag_offset + tag_size,
+      alignment = payload_alignment,
+      kind = MemoryLayoutKind.enum_(EnumLayout {
+        tag_offset, tag_size, variants
+      })
+    }
+  }
+  case lambda(lambda)
+    MemoryLayout { size = 16, alignment = 8, kind = MemoryLayoutKind.primitive }
+  case recursive unreachable()
+}
+
+fun is_recursive(type: PlumType, depth: Int): Bool {
+  switch type
+  case primitive false
+  case never false
+  case struct_(struct_) {
+    for field in struct_ do
+      if field.value.is_recursive(depth + 1) then return true
+    false
+  }
+  case enum_(enum_) {
+    for variant in enum_ do
+      for arg in variant.value do
+        if arg.is_recursive(depth + 1) then return true
+    false
+  }
+  case lambda(lambda) false
+  case recursive(level) level >= depth
+}
+
+| TODO: make efficient by reordering things
+
+struct EfficientLayout {
+  size: Int, alignment: Int,
+  input_to_offset: Slice[Int], | maps each input (by index) to its offset
+  inputs_sorted_by_offset: Slice[Int],
+}
+fun layout_efficiently(inputs: Slice[MemoryLayout]): EfficientLayout {
+  var input_to_offset = list[Int]()
+  var inputs_sorted_by_offset = list[Int]()
+  var offset = 0
+  var alignment = 1
+  for input in inputs.iter().enumerate() do {
+    var layout = input.item
+
+    offset = offset.round_up_to_multiple_of(layout.alignment)
+    input_to_offset.&.push(offset)
+    inputs_sorted_by_offset.&.push(input.index)
+
+    offset = offset + layout.size
+    alignment = max(alignment, layout.alignment)
+  }
+  EfficientLayout {
+    size = offset, alignment, input_to_offset = input_to_offset.to_slice(),
+    inputs_sorted_by_offset = inputs_sorted_by_offset.to_slice(),
+  }
+}
