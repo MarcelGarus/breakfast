@@ -1,0 +1,348 @@
+| Well-Aligned Form of Fixed-Layout Expressions  
+|
+| This compiler stage is pretty low-level. It's no longer graph based, but
+| mainly tree based – as a preparation for lowering to stack-based byte code.
+| Types no longer exist. Instead, each expression corresponds to a slice of
+| bytes. For expressions to be compatible (such as branches of a switch), they
+| just have to have the same length.
+| Structs have been converted into runs of expressions (shown using curly
+| braces). Enums have been converted into tagged unions.
+|
+| TODO: alignment
+| TODO: heap
+| TODO: reference counting
+|
+| main Int: @0:word
+|   | Creating and accessing a struct.
+|   | foo = & x: @0 y: 42
+|   | foo.y
+|   @1 = {@0 42:word}.member(8)
+|   | Creating and switching on an enum.
+|   | foo: Bool = True
+|   | foo
+|   | % True: Some 5
+|   |   False: None
+|   @2 = {1:byte}.member(0) %
+|     0 -> {padding(8) 0:byte}
+|     1 -> {5:word 1:byte}
+
+import plum.mar
+
+struct Waffle { funs: Map[WaffleSignature, WaffleFun] }
+struct WaffleSignature { string: String }
+
+| Functions here don't explicitly contain parameters. Instead, the local @0
+| represents the parameters. @0 is guaranteed to exist and be on the stack when
+| the function starts executing.
+struct WaffleFun { locals: Slice[WaffleExpr], body: WaffleBody }
+struct WaffleId { index: Int } | index into the WaffleFun's locals
+struct WaffleBody { locals: Slice[WaffleId], returns: WaffleExpr }
+
+struct WaffleExpr { size: Int, alignment: Int, kind: WaffleExprKind }
+enum WaffleExprKind {
+  param,
+  padding: Int,
+  byte: Byte, | 8 bits
+  word: Int,  | 64 bits
+  local: WaffleId,
+  struct_: Slice[WaffleExpr],
+  member: WaffleMember,
+  switch_: WaffleSwitch,
+  call: WaffleCall,
+  add_64: &WaffleExpr,
+  sub_64: &WaffleExpr,
+  mul_64: &WaffleExpr,
+  div_64: &WaffleExpr,
+  mod_64: &WaffleExpr,
+  and_64: &WaffleExpr,
+  or_64: &WaffleExpr,
+  xor_64: &WaffleExpr,
+  crash: &WaffleExpr,
+}
+struct WaffleMember { of: &WaffleExpr, offset: Int }
+struct WaffleSwitch { byte: &WaffleExpr, cases: Slice[WaffleBody] }
+struct WaffleCall { function: WaffleSignature, args: &WaffleExpr }
+
+fun waffle_padding(amount: Int): WaffleExpr {
+  WaffleExpr {
+    size = amount, alignment = 1, kind = WaffleExprKind.padding(amount)
+  }
+}
+fun waffle_byte(byte: Byte): WaffleExpr {
+  WaffleExpr { size = 1, alignment = 1, kind = WaffleExprKind.byte(byte) }
+}
+fun waffle_word(word: Int): WaffleExpr {
+  WaffleExpr { size = 8, alignment = 8, kind = WaffleExprKind.word(word) }
+}
+fun waffle_local(id: WaffleId, size: Int, alignment: Int): WaffleExpr {
+  WaffleExpr { size, alignment, kind = WaffleExprKind.local(id) }
+}
+fun waffle_struct(fields: Slice[WaffleExpr]): WaffleExpr {
+  var size = 0
+  var alignment = 1
+  for field in fields do {
+    size.is_multiple_of(field.alignment) or panic("badly aligned field in struct")
+    size = size + field.size
+    alignment = max(alignment, field.alignment)
+  }
+  WaffleExpr { size, alignment, kind = WaffleExprKind.struct_(fields) }
+}
+fun waffle_member(
+  of: WaffleExpr, offset: Int, size: Int, alignment: Int
+): WaffleExpr {
+  offset >= 0 or panic("negative offset")
+  offset + size <= of.size or panic("offset too big")
+  WaffleExpr {
+    size, alignment,
+    kind = WaffleExprKind.member(WaffleMember { of = of.put_on_heap(), offset })
+  }
+}
+fun waffle_switch(byte: WaffleExpr, cases: Slice[WaffleBody]): WaffleExpr {
+  byte.size == 1 or panic("switch byte has invalid size")
+  byte.alignment == 1 or panic("switch byte has invalid alignment")
+  cases.is_not_empty() or panic("switch with no cases")
+  var size = cases.get(0).returns.size
+  var alignment = 1
+  for case_ in cases do {
+    size == case_.returns.size or panic("switch cases have different sizes")
+    alignment = max(alignment, case_.returns.alignment)
+  }
+  WaffleExpr {
+    size, alignment,
+    kind = WaffleExprKind.switch_(WaffleSwitch { byte = byte.put_on_heap(), cases })
+  }
+}
+fun waffle_call(
+  function: WaffleSignature, args: WaffleExpr, size: Int, alignment: Int
+): WaffleExpr {
+  WaffleExpr {
+    size, alignment,
+    kind = WaffleExprKind.call(WaffleCall { function, args = args.put_on_heap() })
+  }
+}
+fun is_word(expr: WaffleExpr): Bool {
+  expr.size == 8 and expr.alignment == 8
+}
+fun waffle_int_operands(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  left.is_word() or panic("int operands, but left is not an int 64")
+  right.is_word() or panic("int operands, but right is not an int 64")
+  waffle_struct(list(left, right).to_slice())
+}
+fun waffle_add_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.add_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_sub_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.sub_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_mul_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.mul_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_div_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.div_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_mod_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.mod_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_and_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.and_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_or_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.or_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_xor_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.xor_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_crash(message_ptr: WaffleExpr, message_len: WaffleExpr): WaffleExpr {
+  message_ptr.is_word() or panic("crash, but message_ptr is not a word")
+  message_len.is_word() or panic("crash, but message_len is not a word")
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.crash(
+      waffle_struct(list(message_ptr, message_len).to_slice()).put_on_heap()
+    ),
+  }
+}
+struct WaffleFunBuilder { locals: List[WaffleExpr] }
+struct WaffleBodyBuilder {
+  local_exprs: &List[WaffleExpr], local_ids: List[WaffleId], alignment: Int
+}
+fun waffle_fun_builder(args_size: Int, args_alignment: Int): WaffleFunBuilder {
+  WaffleFunBuilder {
+    locals = list(WaffleExpr {
+      size = args_size, alignment = args_alignment,
+      kind = WaffleExprKind.param,
+    })
+  }
+}
+fun body(builder: &WaffleFunBuilder): WaffleBodyBuilder {
+  WaffleBodyBuilder {
+    local_exprs = builder.locals.&, local_ids = list[WaffleId](), alignment = 1
+  }
+}
+fun local(builder: &WaffleBodyBuilder, expr: WaffleExpr): WaffleExpr {
+  var id = WaffleId { index = builder.local_exprs.len }
+  builder.local_exprs.push(expr)
+  builder.local_ids.&.push(id)
+  builder.alignment = max(builder.alignment, expr.alignment)
+  waffle_local(id, expr.size, expr.alignment)
+}
+fun returns(builder: WaffleBodyBuilder, expr: WaffleExpr): WaffleBody {
+  WaffleBody { locals = builder.local_ids.to_slice(), returns = expr }
+}
+fun finish(builder: WaffleFunBuilder, body: WaffleBody): WaffleFun {
+  WaffleFun { locals = builder.locals.to_slice(), body }
+}
+
+fun get(fun_: WaffleFun, id: WaffleId): WaffleExpr { fun_.locals.get(id.index) }
+
+fun ==(a: WaffleId, b: WaffleId): Bool { a.index == b.index }
+fun hash(hasher: &Hasher, id: WaffleId) { hasher.hash(id.index) }
+
+| fun waffle_signature(
+|   name: String, params: Slice[WaffleParam]
+| ): WaffleSignature {
+|   var b = string_builder().&
+|   b."{name}"
+|   for param in params do
+|     b." {switch param case comptime(val) "{val}:{val.type}" case runtime(type) "{type}"}"
+|   WaffleSignature { str = b.to_string() }
+| }
+fun ==(a: WaffleSignature, b: WaffleSignature): Bool { a.string == b.string }
+fun hash(hasher: &Hasher, sig: WaffleSignature) { hasher.hash(sig.string) }
+
+
+fun write[W](writer: W, waffle: Waffle) {
+  var first = true
+  for fun_ in waffle.funs do {
+    if first then first = false else writer."\n"
+    writer."{fun_.key}:\n"
+    writer.write(fun_.value.body, fun_.value, 1)
+  }
+}
+fun write[W](writer: W, signature: WaffleSignature) {
+  writer."{signature.string}"
+}
+fun write[W](writer: W, id: WaffleId) { writer."@{id.index}" }
+fun write[W](writer: W, body: WaffleBody, fun_: WaffleFun, indentation: Int) {
+  for id in body.locals do {
+    var expr = fun_.get(id)
+    for i in 0..indentation do writer."  "
+    writer."{id} = "
+    writer.write(expr, fun_, indentation)
+    writer."\n"
+  }
+  for i in 0..indentation do writer."  "
+  writer.write(body.returns, fun_, indentation)
+}
+fun write[W](
+  writer: W, expr: WaffleExpr, fun_: WaffleFun, indentation: Int
+) {
+  switch expr.kind
+  case param unreachable()
+  case padding(amount) writer."padding({amount})"
+  case byte(byte) writer."{byte}:byte"
+  case word(word) writer."{word}:word"
+  case local(id) writer."{id}"
+  case struct_(struct_) {
+    writer."\{"
+    var first = true
+    for field in struct_ do {
+      if first then first = false else writer.", "
+      writer.write(field, fun_, indentation + 1)
+    }
+    writer."\}"
+  }
+  case member(member) {
+    writer.write(member.of.*, fun_, indentation)
+    writer.".member({member.offset})"
+  }
+  case switch_(switch_) {
+    writer.write(switch_.byte.*, fun_, indentation)
+    writer." %"
+    for case_ in switch_.cases.iter().enumerate() do {
+      writer."\n"
+      for i in 0..indentation do writer."  "
+      writer."  {case_.index} -> \{"
+      writer."\n"
+      writer.write(case_.item, fun_, indentation + 2)
+      writer."\n"
+      for i in 0..indentation do writer."  "
+      writer."  \}"
+    }
+  }
+  case call(call) {
+    writer."({call.function} "
+    writer.write(call.args.*, fun_, indentation)
+    writer.")"
+  }
+  case add_64(ops) {
+    writer."(add_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case sub_64(ops) {
+    writer."(sub_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case mul_64(ops) {
+    writer."(mul_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case div_64(ops) {
+    writer."(div_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case mod_64(ops) {
+    writer."(mod_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case and_64(ops) {
+    writer."(and_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case or_64(ops) {
+    writer."(or_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case xor_64(ops) {
+    writer."(xor_64 "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  case crash(ops) {
+    writer."(crash "
+    writer.write(ops.*, fun_, indentation)
+    writer.")"
+  }
+  writer."[size={expr.size},alignment={expr.alignment}]"
+}

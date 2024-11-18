@@ -34,10 +34,12 @@ struct Vm {
 
 enum ByteCodeInstruction {
   | stack stuff
+  push_padding: Int, | pushes the given amount of padding bytes to the stack
   push_8: Byte,
   push_64: Int,
   push_8_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
   push_64_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
+  pop: Int, | pops the amount
   pop_below_top: Tuple2[Int, Int], | (skip, amount). pops amount bytes below the top skip bytes
   | control flow stuff
   jump: Address,
@@ -72,11 +74,16 @@ fun write[W](writer: W, vm: Vm) {
 }
 fun write[W](writer: W, instruction: ByteCodeInstruction) {
   switch instruction
+  case push_padding(amount)
+    if amount == 0 then writer."// push_padding 0" else writer."push_padding {amount}"
   case push_8(byte) writer."push_8 {byte}"
   case push_64(int) writer."push_64 {int}"
   case push_8_from_stack(offset) writer."push_8_from_stack {offset}"
   case push_64_from_stack(offset) writer."push_64_from_stack {offset}"
-  case pop_below_top(tuple) writer."pop_below_top {tuple.a} {tuple.b}"
+  case pop(amount) if amount == 0 then writer."// pop 0" else writer."pop {amount}"
+  case pop_below_top(tuple)
+    if tuple.b == 0 then writer."// pop_below_top {tuple.a} {tuple.b}" else
+    writer."pop_below_top {tuple.a} {tuple.b}"
   case jump(target) writer."jump {target}"
   case jump_table(table) {
     writer."jump_table"
@@ -133,6 +140,9 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     println("running {instruction.debug()}")
 
     switch instruction
+    case push_padding(amount) {
+      for i in 0..amount do vm.data_stack.&.push(16#aa.lower_byte())
+    }
     case push_8(byte) vm.data_stack.&.push(byte)
     case push_64(word) vm.&.push_int(word)
     case push_8_from_stack(offset) {
@@ -143,6 +153,7 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
       var start = vm.data_stack.len - 8 - offset
       for i in 0..8 do vm.data_stack.&.push(vm.data_stack.get(start + i))
     }
+    case pop(amount) vm.data_stack.&.pop(amount)
     case pop_below_top(tuple) {
       var skip = tuple.a
       var amount = tuple.b
