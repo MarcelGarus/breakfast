@@ -22,7 +22,7 @@ enum ToastType {
 }
 struct ToastTypeCall { name: StringAndSrc, args: Slice[ToastType] }
 struct ToastTypeField { name: StringAndSrc, type: ToastType }
-struct ToastTypeVariant { name: StringAndSrc, args: Slice[ToastType] }
+struct ToastTypeVariant { name: StringAndSrc, payloads: Slice[ToastType] }
 struct ToastTypeLambda { args: Slice[ToastType], return_type: &ToastType }
 
 struct ToastFun {
@@ -52,7 +52,7 @@ struct ToastSwitch {
   condition: &ToastExpr, percent: StringAndSrc, cases: Slice[ToastCase]
 }
 struct ToastCase {
-  symbol: StringAndSrc, params: Slice[StringAndSrc], body: ToastExpr
+  symbol: StringAndSrc, payloads: Slice[StringAndSrc], body: ToastExpr
 }
 struct ToastLambda {
   backslash: StringAndSrc, params: Slice[ToastParam], body: &ToastExpr
@@ -447,17 +447,17 @@ fun parse_enum_type(bacon: Bacon): Result[Maybe[ToastType], Error] {
       return bad_input[ToastType](error(
         "Expected variant name.", parser.src_of_rest()))
 
-    var args =
+    var payloads =
       if child.children.is_empty() then {
-        var args = parser.&.parse_type_atoms()?
+        var payloads = parser.&.parse_type_atoms()?
         parser.&.ensure_is_at_end()?
-        args
+        payloads
       } else {
         parser.&.ensure_is_at_end()?
         child.children.parse_types()?
       }
 
-    variants.&.push(ToastTypeVariant { name, args })
+    variants.&.push(ToastTypeVariant { name, payloads })
   }
 
   parsed(ToastType.enum_(variants.to_slice()))
@@ -723,8 +723,9 @@ fun parse_switch(
       return bad_input[ToastExpr](error(
         "Expected the symbol of a case.", parser.src_of_rest()))
 
-    var params = list[StringAndSrc]()
-    loop params.&.push(parser.&.parse_name() or break)
+    var payloads = list[StringAndSrc]()
+    loop payloads.&.push(parser.&.parse_name() or break)
+    var payloads = payloads.to_slice()
 
     var colon = parser.&.consume(":") or
       return bad_input[ToastExpr](error(
@@ -747,7 +748,7 @@ fun parse_switch(
             "A case is neither single- nor multi-line.", parser.src_of_rest()))
         expr
       }
-    cases.&.push(ToastCase { symbol, params = params.to_slice(), body })
+    cases.&.push(ToastCase { symbol, payloads, body })
   }
 
   parsed(ToastExpr.switch_(ToastSwitch {

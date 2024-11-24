@@ -43,7 +43,7 @@ enum YogurtOp {
 }
 struct YogurtMember { of: YogurtId, name: String }
 struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
-struct YogurtTag { symbol: String, args: Slice[YogurtId] }
+struct YogurtTag { symbol: String, payloads: Slice[YogurtId] }
 struct YogurtLambda { function: YogurtSignature, captures: Slice[YogurtId] }
 struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
 struct YogurtCall { function: YogurtSignature, args: Slice[YogurtId] }
@@ -110,7 +110,7 @@ fun write[W](
   case member(member) writer."{member.of}.{member.name}"
   case tag(tag) {
     writer."tag {tag.symbol}"
-    for arg in tag.args do writer." {arg}"
+    for payload in tag.payloads do writer." {payload}"
   }
   case switch_(switch_) {
     writer."switch {switch_.condition}"
@@ -751,31 +751,31 @@ fun to_yogurt(
     case tag(tag) {
       var symbol = tag.symbol
 
-      var args = list[YogurtId]()
-      var arg_types = list[PlumType]()
-      for arg in tag.args do {
-        var arg = compiler.lookup(arg)
-        var type = builder.get(arg).type
-        args.&.push(arg)
-        arg_types.&.push(type)
+      var payloads = list[YogurtId]()
+      var payload_types = list[PlumType]()
+      for payload in tag.payloads do {
+        var payload = compiler.lookup(payload)
+        var type = builder.get(payload).type
+        payloads.&.push(payload)
+        payload_types.&.push(type)
       }
-      var args = args.to_slice()
-      var arg_types = arg_types.to_slice()
-      var type = PlumType.enum_(map(symbol -> arg_types))
+      var payloads = payloads.to_slice()
+      var payload_types = payload_types.to_slice()
+      var type = PlumType.enum_(map(symbol -> payload_types))
 
       var is_comptime = true
-      for arg in args do
-        if not(builder.get(arg).op is comptime) then is_comptime = false
+      for payload in payloads do
+        if not(builder.get(payload).op is comptime) then is_comptime = false
 
       builder.push({
         if is_comptime
         then YogurtOp.comptime(YogurtValueKind.tag(tuple(symbol, {
-          var comptime_args = list[YogurtValue]()
-          for arg in args do
-            comptime_args.&.push(builder.get(arg).op.comptime.unwrap())
-          comptime_args.to_slice()
+          var comptime_payloads = list[YogurtValue]()
+          for payload in payloads do
+            comptime_payloads.&.push(builder.get(payload).op.comptime.unwrap())
+          comptime_payloads.to_slice()
         })) $ type)
-        else YogurtOp.tag(YogurtTag { symbol, args })
+        else YogurtOp.tag(YogurtTag { symbol, payloads })
       } $ type)
     }
   body.push(id)
@@ -819,7 +819,7 @@ fun collect_captured(
   case member(member) member.of.collect_captured(ignore, captured)
   case symbol {}
   case tag(tag)
-    for arg in tag.args do arg.collect_captured(ignore, captured)
+    for payload in tag.payloads do payload.collect_captured(ignore, captured)
   case switch_(switch_) {
     switch_.condition.collect_captured(ignore, captured)
     for case_ in switch_.cases do
@@ -1142,38 +1142,38 @@ fun compile_cast_fun_body(
     var cases = map[String, YogurtBody]()
     for entry in from.extend_one_level().enum_.unwrap() do {
       var variant = entry.key
-      var from_args = entry.value
-      var to_args = to_variants.get(variant)
+      var from_payloads = entry.value
+      var to_payloads = to_variants.get(variant)
 
       var case_builder = YogurtBodyBuilder {
         parent = builder.parent, body = list[YogurtId]()
       }
       var params = list[YogurtParam]()
-      for arg in from_args do params.&.push(YogurtParam.runtime(arg))
+      for payload in from_payloads do params.&.push(YogurtParam.runtime(payload))
 
-      var from_args_ids = list[YogurtId]()
+      var from_payloads_ids = list[YogurtId]()
       for i in 0..params.len do {
         var yogurt_id = builder.parent.push(params.get(i).to_expr())
-        from_args_ids.&.push(yogurt_id)
+        from_payloads_ids.&.push(yogurt_id)
       }
-      var to_args_ids = list[YogurtId]()
-      for both in zip(zip(from_args.iter(), to_args.iter()), from_args_ids.iter()) do {
-        var from_arg_type = both.a.a
-        var to_arg_type = both.a.b
-        var from_arg_id = both.b
+      var to_payloads_ids = list[YogurtId]()
+      for both in zip(zip(from_payloads.iter(), to_payloads.iter()), from_payloads_ids.iter()) do {
+        var from_payload_type = both.a.a
+        var to_payload_type = both.a.b
+        var from_payload_id = both.b
 
-        to_args_ids.&.push(case_builder.&.push(YogurtOp.call(YogurtCall {
-          function = yogurt.compile_cast_fun(from_arg_type, to_arg_type),
-          args = list(from_arg_id).to_slice(),
-        }) $ to_arg_type))
+        to_payloads_ids.&.push(case_builder.&.push(YogurtOp.call(YogurtCall {
+          function = yogurt.compile_cast_fun(from_payload_type, to_payload_type),
+          args = list(from_payload_id).to_slice(),
+        }) $ to_payload_type))
       }
 
       var cast = case_builder.&.push(YogurtOp.tag(YogurtTag {
-        symbol = variant, args = to_args_ids.to_slice()
+        symbol = variant, payloads = to_payloads_ids.to_slice()
       }) $ to)
 
       var body = YogurtBody {
-        params = from_args_ids.to_slice(),
+        params = from_payloads_ids.to_slice(),
         exprs = case_builder.body.to_slice(),
         returns = cast,
       }

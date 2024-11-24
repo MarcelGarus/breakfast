@@ -348,9 +348,7 @@ fun write[W](
 
 | Converting Yogurt to Waffle  
 
-fun to_waffle(
-  value: YogurtValue
-): WaffleExpr {
+fun to_waffle(value: YogurtValue): WaffleExpr {
   switch value.kind
   case int(int) waffle_word(int)
   case string(string)
@@ -376,7 +374,7 @@ fun to_waffle(
       parts.&.push(
         switch part
         case padding(amount) waffle_padding(amount)
-        case arg(index) tag.b.get(index).to_waffle()
+        case payload(index) tag.b.get(index).to_waffle()
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
@@ -425,7 +423,7 @@ fun to_waffle(
       parts.&.push(
         switch part
         case padding(amount) waffle_padding(amount)
-        case arg(index) yogurt_id_to_waffle_expr.get(tag.args.get(index))
+        case payload(index) yogurt_id_to_waffle_expr.get(tag.payloads.get(index))
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
@@ -443,7 +441,7 @@ fun to_waffle(
         yogurt_id_to_waffle_expr.put(
           id,
           condition.waffle_member(
-            variant_layout.value.offsets.get(payload.index),
+            variant_layout.value.payload_offsets.get(payload.index),
             payload_layout.size, payload_layout.alignment,
           )
         )
