@@ -99,6 +99,7 @@ struct StructLayout {
 }
 enum StructPart { field: String, padding: Int }
 
+| TODO: think about recursive structs. error? allow but like never?
 fun memory_layout_struct(type: PlumType): StructLayout {
   var fields = type.struct_.unwrap()
 
@@ -145,9 +146,16 @@ struct EnumLayout {
 }
 struct VariantLayout {
   parts: Slice[VariantPart],
-  payload_offsets: Slice[Int],
+  payload_positions: Slice[PayloadPosition],
 }
-enum VariantPart { padding: Int, payload: Int, tag: Byte }
+enum VariantPart {
+  padding: Int,
+  payload: Int,
+  payload_ptr: Int, | The payload is saved on the heap, this is only a pointer.
+  tag: Byte,
+}
+struct PayloadPosition { offset: Int, boxing: Boxing }
+enum Boxing { boxed, unboxed }
 
 fun memory_layout_enum(type: PlumType): EnumLayout {
   var variants = type.enum_.unwrap()
@@ -166,15 +174,31 @@ fun memory_layout_enum(type: PlumType): EnumLayout {
   for variant in variant_names.iter().enumerate() do
     variant_to_tag.&.put(variant.item, variant.index.lower_byte())
 
+  var variant_to_payload_boxings = map[String, Slice[Boxing]]()
+  for variant in variant_names do
+    variant_to_payload_boxings.&.put(variant, {
+      var boxing = list[Boxing]()
+      for payload in variants.get(variant) do
+        boxing.&.push(
+          if payload.is_recursive(1) then Boxing.boxed else Boxing.unboxed
+        )
+      boxing.to_slice()
+    })
+
   var payload_aggregates = map[String, AggregateLayout]()
   var max_payload_size = 0
   var max_payload_alignment = 1
 
   for variant in variants do {
     | Layout the args.
+    var boxings = variant_to_payload_boxings.get(variant.key)
     var arg_layouts = list[MemoryLayout]()
-    for arg in variant.value do
-      arg_layouts.&.push(arg.memory_layout())
+    for arg in variant.value.iter().enumerate() do
+      arg_layouts.&.push(
+        switch boxings.get(arg.index)
+        case boxed MemoryLayout { size = 8, alignment = 8 }
+        case unboxed arg.item.memory_layout()
+      )
     var arg_layouts = arg_layouts.to_slice()
 
     | Layout the args efficiently.
@@ -191,6 +215,7 @@ fun memory_layout_enum(type: PlumType): EnumLayout {
 
   for variant in variants do {
     var layout = payload_aggregates.get(variant.key)
+    var boxings = variant_to_payload_boxings.get(variant.key)
 
     | Map parts.
     var parts = list[VariantPart]()
@@ -198,7 +223,10 @@ fun memory_layout_enum(type: PlumType): EnumLayout {
       parts.&.push(
         switch part
         case padding(amount) VariantPart.padding(amount)
-        case field(index) VariantPart.payload(index)
+        case field(index)
+          switch boxings.get(index)
+          case boxed   VariantPart.payload_ptr(index)
+          case unboxed VariantPart.payload(index)
       )
 
     | Add padding so that all payloads have the same size.
@@ -209,13 +237,16 @@ fun memory_layout_enum(type: PlumType): EnumLayout {
     parts.&.push(VariantPart.tag(variant_to_tag.get(variant.key)))
 
     | Map offsets.
-    var payload_offsets = uninitialized_slice[Int](variant.value.len)
-    for entry in layout.field_to_offset do
-      payload_offsets.&.set(entry.key, entry.value)
+    var payload_positions = uninitialized_slice[PayloadPosition](variant.value.len)
+    for entry in layout.field_to_offset do {
+      payload_positions.&.set(entry.key, PayloadPosition {
+        offset = entry.value, boxing = boxings.get(entry.key)
+      })
+    }
 
     | Construct VariantLayout.
     variant_layouts.&.put(variant.key, VariantLayout {
-      parts = parts.to_slice(), payload_offsets,
+      parts = parts.to_slice(), payload_positions,
     })
   }
 

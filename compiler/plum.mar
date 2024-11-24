@@ -53,37 +53,37 @@ fun main(): Never {
   var waffle = yogurt.to_waffle()
   eprintln("Waffle:\n{waffle}\n")
 
-  var waffle = Waffle {
-    funs = map(
-      | Function that accepts [size: 9, alignment: 8], returns [size: 1, alignment: 2]
-      WaffleSignature { string = "a" } -> {
-        var fun_builder = waffle_fun_builder(9, 8)
-        var body = fun_builder.&.body().returns(
-          WaffleExpr { size = 1, alignment = 2, kind = WaffleExprKind.byte(42.lower_byte()) }
-        )
-        fun_builder.finish(body)
-      },
-      WaffleSignature { string = "main Int" } -> {
-        var fun_builder = waffle_fun_builder(0, 1)
-        var body = {
-          var builder = fun_builder.&.body()
-          var blub = builder.&.local(waffle_byte(5.lower_byte()))
-          builder.returns(waffle_aggregate(list(
-            waffle_byte(1.lower_byte()),
-            waffle_byte(2.lower_byte()),
-            waffle_call(
-              WaffleSignature { string = "a" },
-              waffle_aggregate(list(waffle_word(3), blub).to_slice()),
-              1, 2,
-            )
-          ).to_slice()))
-        }
-        fun_builder.finish(body)
-      }
-    )
-  }
+  | var waffle = Waffle {
+  |   funs = map(
+  |     | Function that accepts [size: 9, alignment: 8], returns [size: 1, alignment: 2]
+  |     WaffleSignature { string = "a" } -> {
+  |       var fun_builder = waffle_fun_builder(9, 8)
+  |       var body = fun_builder.&.body().returns(
+  |         WaffleExpr { size = 1, alignment = 2, kind = WaffleExprKind.byte(42.lower_byte()) }
+  |       )
+  |       fun_builder.finish(body)
+  |     },
+  |     WaffleSignature { string = "main Int" } -> {
+  |       var fun_builder = waffle_fun_builder(0, 1)
+  |       var body = {
+  |         var builder = fun_builder.&.body()
+  |         var blub = builder.&.local(waffle_byte(5.lower_byte()))
+  |         builder.returns(waffle_aggregate(list(
+  |           waffle_byte(1.lower_byte()),
+  |           waffle_byte(2.lower_byte()),
+  |           waffle_call(
+  |             WaffleSignature { string = "a" },
+  |             waffle_aggregate(list(waffle_word(3), blub).to_slice()),
+  |             1, 2,
+  |           )
+  |         ).to_slice()))
+  |       }
+  |       fun_builder.finish(body)
+  |     }
+  |   )
+  | }
 
-  | var byte_code = waffle.to_byte_code()
+  var byte_code = waffle.to_byte_code()
 
 
   | var hello = "Hello, panic!"
@@ -102,17 +102,21 @@ fun main(): Never {
   | var main = yogurt.compile()
   | eprintln("Compiled to byte code: {main}")
 
-  | println("Byte Code:")
-  | for i in 0..50 do {
-  |   var address = byte_code + {i * stride_size_of[ByteCodeInstruction]()}
-  |   stdout."{address} | {address.to_reference[ByteCodeInstruction]().*}\n"
-  | }
+  println("Byte Code:")
+  for i in 0..200 do {
+    var address = byte_code + {i * stride_size_of[ByteCodeInstruction]()}
+    stdout."{address} | {address.to_reference[ByteCodeInstruction]().*}\n"
+  }
 
-  | var result = main.call(filled_slice(8, 0.lower_byte()))
-  | var result = result.data.to_reference[Int]().*
-  | print("Result: {result.radix(16)}")
-  | | for byte in result do print(" {byte}")
-  | println()
+  var result = byte_code.call(list(
+    16#33.lower_byte(), 16#33.lower_byte(), 16#33.lower_byte(), 16#33.lower_byte(),
+    16#33.lower_byte(), 16#33.lower_byte(), 16#33.lower_byte(), 16#33.lower_byte(),
+  ).to_slice())
+
+  var result = result.data.to_reference[Int]().*
+  print("Result: {result.radix(16)}")
+  | for byte in result do print(" {byte}")
+  println()
 
   exit(0)
 }

@@ -207,6 +207,81 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
   case and_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.and_64) }
   case or_64(args)  { args.compile(builder) builder.emit(ByteCodeInstruction.or_64) }
   case xor_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.xor_64) }
+  case box(data) {
+    var padding_before_data = builder.align_to(8)
+
+    | Compute the data to be boxed.
+    var data_start = builder.stack_size
+    data.compile(builder)
+    var padding_after_data = builder.align_to(8)
+
+    | Allocate memory for the data.
+    var ptr_start = builder.stack_size
+    builder.emit(ByteCodeInstruction.push_64(data.size))
+    builder.emit(ByteCodeInstruction.push_8(data.alignment.lower_byte()))
+    builder.emit(ByteCodeInstruction.malloc)
+
+    | Copy the data to the heap.
+    var cursor = 0
+    loop if cursor + 8 > data.size then break else {
+      builder.emit(ByteCodeInstruction.push_64_from_stack(
+        builder.stack_size - ptr_start - 8
+      ))
+      builder.emit(ByteCodeInstruction.push_64(cursor))
+      builder.emit(ByteCodeInstruction.add_64)
+      builder.emit(ByteCodeInstruction.push_64_from_stack(
+        builder.stack_size - {data_start + cursor} - 8
+      ))
+      builder.emit(ByteCodeInstruction.store_64)
+      cursor = cursor + 8
+    }
+    loop if cursor == data.size then break else {
+      builder.emit(ByteCodeInstruction.push_64_from_stack(
+        builder.stack_size - ptr_start - 8
+      ))
+      builder.emit(ByteCodeInstruction.push_64(cursor))
+      builder.emit(ByteCodeInstruction.add_64)
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
+        builder.stack_size - {data_start + cursor} - 1
+      ))
+      builder.emit(ByteCodeInstruction.store_8)
+      cursor = cursor + 1
+    }
+    builder.emit(ByteCodeInstruction.pop_below_top(tuple(
+      8, padding_after_data + data.size + padding_before_data
+    )))
+  }
+  case unbox(ptr) {
+    var padding = builder.align_to(8)
+    | Compute the pointer to be unboxed.
+    var ptr_start = builder.stack_size
+    ptr.compile(builder)
+
+    | Copy the data from the heap.
+    var data_start = builder.stack_size
+    var cursor = 0
+    loop if cursor + 8 > expr.size then break else {
+      builder.emit(ByteCodeInstruction.push_64_from_stack(
+        builder.stack_size - ptr_start - 8
+      ))
+      builder.emit(ByteCodeInstruction.push_64(cursor))
+      builder.emit(ByteCodeInstruction.add_64)
+      builder.emit(ByteCodeInstruction.load_64) | TODO: alignment
+      cursor = cursor + 8
+    }
+    loop if cursor == expr.size then break else {
+      var padding = builder.align_to(8)
+      builder.emit(ByteCodeInstruction.push_64_from_stack(
+        builder.stack_size - ptr_start - 8
+      ))
+      builder.emit(ByteCodeInstruction.push_64(cursor))
+      builder.emit(ByteCodeInstruction.add_64)
+      builder.emit(ByteCodeInstruction.load_8)
+      builder.emit(ByteCodeInstruction.pop_below_top(tuple(1, padding)))
+      cursor = cursor + 1
+    }
+    builder.emit(ByteCodeInstruction.pop_below_top(tuple(expr.size, 8 + padding)))
+  }
   case crash(args) {
     todo("crash args")
     builder.emit(ByteCodeInstruction.crash)

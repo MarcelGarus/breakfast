@@ -68,7 +68,10 @@ enum ByteCodeInstruction {
 
 fun write[W](writer: W, vm: Vm) {
   writer."data stack:"
-  for byte in vm.data_stack do writer." {byte}"
+  for i in 0..vm.data_stack.len do {
+    if i % 8 == 0 then writer."\n"
+    writer." {"{vm.data_stack.get(i).radix(16)}".pad_left(2, #0)}"
+  }
   writer."\ncall stack:"
   for call in vm.call_stack do writer." {call}"
 }
@@ -134,9 +137,7 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     var instruction = current_call.*.to_reference[ByteCodeInstruction]().*
     current_call += stride_size_of[ByteCodeInstruction]()
 
-    stdout."data stack:"
-    for byte in vm.data_stack do stdout." {"{byte.radix(16)}".pad_left(2, #0)}"
-    stdout."\n"
+    stdout."{vm}"
     println("running {instruction.debug()}")
 
     switch instruction

@@ -8,8 +8,6 @@
 | Structs have been converted into runs of expressions (shown using curly
 | braces). Enums have been converted into tagged unions.
 |
-| TODO: heap
-|
 | main Int: @0:word
 |   | Creating and accessing a struct.
 |   | foo = & x: @0 y: 42   | & y: Int x: Int
@@ -55,6 +53,8 @@ enum WaffleExprKind {
   and_64: &WaffleExpr,
   or_64: &WaffleExpr,
   xor_64: &WaffleExpr,
+  box: &WaffleExpr,
+  unbox: &WaffleExpr,
   crash: &WaffleExpr,
 }
 struct WaffleMember { of: &WaffleExpr, offset: Int }
@@ -174,6 +174,20 @@ fun waffle_xor_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
     kind = WaffleExprKind.xor_64(waffle_int_operands(left, right).put_on_heap()),
+  }
+}
+fun waffle_box(expr: WaffleExpr): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8,
+    kind = WaffleExprKind.box(expr.put_on_heap())
+  }
+}
+fun waffle_unbox(expr: WaffleExpr, size: Int, alignment: Int): WaffleExpr {
+  expr.size == 8 or panic("expected pointer")
+  expr.alignment == 8 or panic("expected pointer")
+  WaffleExpr {
+    size, alignment,
+    kind = WaffleExprKind.unbox(expr.put_on_heap())
   }
 }
 fun waffle_crash(message_ptr: WaffleExpr, message_len: WaffleExpr): WaffleExpr {
@@ -339,6 +353,16 @@ fun write[W](
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
+  case box(expr) {
+    writer."box("
+    writer.write(expr.*, fun_, indentation)
+    writer.")"
+  }
+  case unbox(ptr) {
+    writer."unbox("
+    writer.write(ptr.*, fun_, indentation)
+    writer."):{expr.size}"
+  }
   case crash(ops) {
     writer."(crash "
     writer.write(ops.*, fun_, indentation)
@@ -375,6 +399,8 @@ fun to_waffle(value: YogurtValue): WaffleExpr {
         switch part
         case padding(amount) waffle_padding(amount)
         case payload(index) variant.payloads.get(index).to_waffle()
+        case payload_ptr(index)
+          waffle_box(variant.payloads.get(index).to_waffle())
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
@@ -423,6 +449,8 @@ fun to_waffle(
         switch part
         case padding(amount) waffle_padding(amount)
         case payload(index) yogurt_id_to_waffle_expr.get(variant.payloads.get(index))
+        case payload_ptr(index)
+          waffle_box(yogurt_id_to_waffle_expr.get(variant.payloads.get(index)))
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
@@ -437,10 +465,17 @@ fun to_waffle(
       for payload in payloads.iter().enumerate() do {
         var id = payload.item
         var payload_layout = fun_.get(id).type.memory_layout()
+        var payload_position =
+          variant_layout.value.payload_positions.get(payload.index)
         yogurt_id_to_waffle_expr.put(
           id,
-          condition.waffle_member(
-            variant_layout.value.payload_offsets.get(payload.index),
+          switch payload_position.boxing
+          case boxed waffle_unbox(
+            condition.waffle_member(payload_position.offset, 8, 8),
+            payload_layout.size, payload_layout.alignment,
+          )
+          case unboxed condition.waffle_member(
+            payload_position.offset,
             payload_layout.size, payload_layout.alignment,
           )
         )
