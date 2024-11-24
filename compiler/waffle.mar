@@ -43,7 +43,7 @@ enum WaffleExprKind {
   byte: Byte, | 8 bits
   word: Int,  | 64 bits
   local: WaffleId,
-  struct_: Slice[WaffleExpr], | TODO: rename to aggregate
+  aggregate: Slice[WaffleExpr],
   member: WaffleMember,
   switch_: WaffleSwitch,
   call: WaffleCall,
@@ -75,15 +75,16 @@ fun waffle_word(word: Int): WaffleExpr {
 fun waffle_local(id: WaffleId, size: Int, alignment: Int): WaffleExpr {
   WaffleExpr { size, alignment, kind = WaffleExprKind.local(id) }
 }
-fun waffle_struct(fields: Slice[WaffleExpr]): WaffleExpr {
+fun waffle_aggregate(fields: Slice[WaffleExpr]): WaffleExpr {
   var size = 0
   var alignment = 1
   for field in fields do {
-    size.is_multiple_of(field.alignment) or panic("badly aligned field in struct")
+    size.is_multiple_of(field.alignment) or
+      panic("badly aligned field in aggregate")
     size = size + field.size
     alignment = max(alignment, field.alignment)
   }
-  WaffleExpr { size, alignment, kind = WaffleExprKind.struct_(fields) }
+  WaffleExpr { size, alignment, kind = WaffleExprKind.aggregate(fields) }
 }
 fun waffle_member(
   of: WaffleExpr, offset: Int, size: Int, alignment: Int
@@ -125,7 +126,7 @@ fun is_word(expr: WaffleExpr): Bool {
 fun waffle_int_operands(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   left.is_word() or panic("int operands, but left is not an int 64")
   right.is_word() or panic("int operands, but right is not an int 64")
-  waffle_struct(list(left, right).to_slice())
+  waffle_aggregate(list(left, right).to_slice())
 }
 fun waffle_add_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
@@ -181,7 +182,7 @@ fun waffle_crash(message_ptr: WaffleExpr, message_len: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
     kind = WaffleExprKind.crash(
-      waffle_struct(list(message_ptr, message_len).to_slice()).put_on_heap()
+      waffle_aggregate(list(message_ptr, message_len).to_slice()).put_on_heap()
     ),
   }
 }
@@ -266,10 +267,10 @@ fun write[W](
   case byte(byte) writer."{byte}:byte"
   case word(word) writer."{word}:word"
   case local(id) writer."{id}"
-  case struct_(struct_) {
+  case aggregate(aggregate) {
     writer."\{"
     var first = true
-    for field in struct_ do {
+    for field in aggregate do {
       if first then first = false else writer.", "
       writer.write(field, fun_, indentation + 1)
     }
@@ -354,7 +355,7 @@ fun to_waffle(
   switch value.kind
   case int(int) waffle_word(int)
   case string(string)
-    waffle_struct(list(
+    waffle_aggregate(list(
       waffle_word(string.data.to_int()),
       waffle_word(string.len),
     ).to_slice())
@@ -367,7 +368,7 @@ fun to_waffle(
         case padding(amount) waffle_padding(amount)
         case field(name) fields.get(name).to_waffle()
       )
-    waffle_struct(parts.to_slice())
+    waffle_aggregate(parts.to_slice())
   }
   case tag(tag) {
     var layout = value.type.memory_layout_enum().variants.get(tag.a)
@@ -379,7 +380,7 @@ fun to_waffle(
         case arg(index) tag.b.get(index).to_waffle()
         case tag(byte) waffle_byte(byte)
       )
-    waffle_struct(parts.to_slice())
+    waffle_aggregate(parts.to_slice())
   }
   case lambda todo()
   case type todo()
@@ -406,7 +407,7 @@ fun to_waffle(
         case field(name) yogurt_id_to_waffle_expr.get(struct_.get(name))
         case padding(amount) waffle_padding(amount)
       )
-    waffle_struct(parts.to_slice())
+    waffle_aggregate(parts.to_slice())
   }
   case member(member) {
     var struct_layout = fun_.get(member.of).type.memory_layout_struct()
@@ -428,7 +429,7 @@ fun to_waffle(
         case arg(index) yogurt_id_to_waffle_expr.get(tag.args.get(index))
         case tag(byte) waffle_byte(byte)
       )
-    waffle_struct(parts.to_slice())
+    waffle_aggregate(parts.to_slice())
   }
   case switch_(switch_) {
     var condition = yogurt_id_to_waffle_expr.get(switch_.condition)
@@ -477,7 +478,7 @@ fun to_waffle(
         case padding(amount) waffle_padding(amount)
         case arg(index) yogurt_id_to_waffle_expr.get(call.args.get(index))
       )
-    var args = waffle_struct(parts.to_slice())
+    var args = waffle_aggregate(parts.to_slice())
 
     var return_layout = yogurt.funs.get(call.receiver).return_type().memory_layout()
 

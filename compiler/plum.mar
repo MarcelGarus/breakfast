@@ -68,12 +68,12 @@ fun main(): Never {
         var body = {
           var builder = fun_builder.&.body()
           var blub = builder.&.local(waffle_byte(5.lower_byte()))
-          builder.returns(waffle_struct(list(
+          builder.returns(waffle_aggregate(list(
             waffle_byte(1.lower_byte()),
             waffle_byte(2.lower_byte()),
             waffle_call(
               WaffleSignature { string = "a" },
-              waffle_struct(list(waffle_word(3), blub).to_slice()),
+              waffle_aggregate(list(waffle_word(3), blub).to_slice()),
               1, 2,
             )
           ).to_slice()))
