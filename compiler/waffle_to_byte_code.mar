@@ -161,7 +161,7 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
   case byte(byte) builder.emit(ByteCodeInstruction.push_8(byte))
   case word(word) builder.emit(ByteCodeInstruction.push_64(word))
   case local(local) builder.copy_from_stack(local, expr.size)
-  case struct_(struct_) for field in struct_ do field.compile(builder)
+  case aggregate(aggregate) for field in aggregate do field.compile(builder)
   case member(member) {
     var padding = builder.align_to(member.of.alignment)
     member.of.compile(builder)
