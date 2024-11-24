@@ -239,7 +239,7 @@ fun write[W](writer: W, waffle: Waffle) {
   var first = true
   for fun_ in waffle.funs do {
     if first then first = false else writer."\n"
-    writer."{fun_.key}:\n"
+    writer."{fun_.key}: (@0 contains args)\n"
     writer.write(fun_.value.body, fun_.value, 1)
   }
 }
@@ -264,8 +264,8 @@ fun write[W](
   switch expr.kind
   case param unreachable()
   case padding(amount) writer."padding({amount})"
-  case byte(byte) writer."{byte}:byte"
-  case word(word) writer."{word}:word"
+  case byte(byte) writer."{byte}:1"
+  case word(word) writer."{word}:8"
   case local(id) writer."{id}"
   case aggregate(aggregate) {
     writer."\{"
@@ -278,7 +278,7 @@ fun write[W](
   }
   case member(member) {
     writer.write(member.of.*, fun_, indentation)
-    writer.".member({member.offset})"
+    writer.".{member.offset}:{expr.size}"
   }
   case switch_(switch_) {
     writer.write(switch_.byte.*, fun_, indentation)
@@ -344,7 +344,6 @@ fun write[W](
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  writer."[size={expr.size},alignment={expr.alignment}]"
 }
 
 | Converting Yogurt to Waffle  
