@@ -1,0 +1,305 @@
+| Converting Toast To Egg  
+
+import plum.mar
+
+| Variable Scoping  
+| Tracks which names are in scope using a simple vector:
+| - When new names are defined, appends items to the vector.
+| - When names are referenced, walks the vector from the back, searching for the
+|   name. Names that are defined later shadow previously defined names.
+| - When bodies are compiled, save the length of the vector before entering the
+|   body. When exiting the body, trim the vector to that length – all names
+|   defined inside the body automatically go out of scope.
+
+struct Visible { vars: List[NameBinding] }
+struct NameBinding { name: String, id: EggId }
+fun visible(): _ { Visible { vars = list[NameBinding]() } }
+fun define(visible: &Visible, name: String, id: EggId) {
+  visible.vars.&.push(NameBinding { name, id })
+}
+fun lookup(visible: Visible, name: String): Maybe[EggId] {
+  for binding in visible.vars.to_slice().rev_iter() do
+    if binding.name == name then return some(binding.id)
+  none[EggId]()
+}
+struct VisibleSnapshot { vars_len: Int }
+fun snapshot(visible: Visible): _ {
+  VisibleSnapshot { vars_len = visible.vars.len }
+}
+fun restore(visible: &Visible, snapshot: VisibleSnapshot) {
+  visible.vars.len = snapshot.vars_len
+}
+
+fun to_egg(toast: Toast): Result[Egg, Error] {
+  var funs = list[EggFun]()
+
+  for builtin in builtins do funs.&.push(builtin.create_builtin_fun())
+  for def in toast.defs do
+    if def is fun_(fun_) then
+      funs.&.push(EggFun {
+        name = fun_.name,
+        params = {
+          var params = list[EggParam]()
+          for param in fun_.params do
+            params.&.push(param.name.string / param.type.to_egg(toast)?)
+          params.to_slice()
+        },
+        return_type = fun_.return_type.to_egg(toast)?,
+        impl = EggFunImpl.code({
+          var visible = visible()
+          var compiler = egg_code_compiler(toast).&
+          var body = compiler.egg_body_compiler().&
+
+          for param in fun_.params do
+            visible.&.define(param.name.string, body.push_param(param.name.src))
+          var returned = fun_.body.to_egg(body, visible.&)?
+          var body = body.finish(returned)
+
+          EggCode { exprs = compiler.exprs.to_slice(), body }
+        })
+      })
+
+  ok[Egg, Error](Egg { funs })
+}
+
+fun to_egg(type: ToastType, toast: Toast): Result[PlumType, Error] {
+  type.to_egg(toast, map[String, PlumType](), list[OngoingTypeCall](), 0)
+}
+struct OngoingTypeCall { depth: Int, name: String, args: Slice[PlumType] }
+fun to_egg(
+  type: ToastType, toast: Toast, env: Map[String, PlumType],
+  parent_calls: List[OngoingTypeCall], depth: Int,
+): Result[PlumType, Error] {
+  switch type
+  case variable(variable)
+    ok[PlumType, Error](
+      if env.get_maybe(variable.string) is some(type)
+      then type
+      else PlumType.primitive(variable.string)
+    )
+  case call(call) {
+    var name = call.name
+
+    | Lower the arguments.
+    var args = list[PlumType]()
+    for arg in call.args do
+      args.&.push(arg.to_egg(toast, env, parent_calls, depth)?)
+    var args = args.to_slice()
+
+    | Handle builtin types.
+    if name.string == "Int" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called Int with args", name.src))
+      return ok[PlumType, Error](type_int)
+    }
+    if name.string == "String" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called String with args", name.src))
+      return ok[PlumType, Error](type_string)
+    }
+    if name.string == "Type" then {
+      call.args.is_empty() or
+        return error[PlumType, Error](error("Called Type with args", name.src))
+      return ok[PlumType, Error](type_type)
+    }
+    if name.string == "Never" then {
+      call.args.is_empty() or
+        return return error[PlumType, Error](error("Called Never with args", name.src))
+      return ok[PlumType, Error](type_never)
+    }
+
+    | Are we recursively lowering a type? If so, we need to insert a recursive
+    | type instead of endlessly digging down into the type.
+    for call in parent_calls do
+      if call.name == name.string and call.args == args then
+        return ok[PlumType, Error](PlumType.recursive(depth - call.depth))
+
+    | Look for a user-defined type with the name.
+    for def in toast.defs do
+      if def is type(def) then
+        if def.name.string == name.string then {
+          var inner_env = map[String, PlumType]()
+          def.params.len == args.len or
+            return error[PlumType, Error](error(
+              "Tried to instantiate {def.name.string} with {args.len} args, but it needs {def.params.len}.",
+              name.src
+            ))
+          for both in zip(def.params.iter(), args.iter()) do
+            inner_env.&.put(both.a.string, both.b)
+          parent_calls.&.push(OngoingTypeCall { name = name.string, args, depth })
+          var type = def.type.to_egg(toast, inner_env, parent_calls, depth)?
+          parent_calls.&.pop()
+          return ok[PlumType, Error](type)
+        }
+    return error[PlumType, Error](error("{name.string} doesn't exist.", name.src))
+  }
+  case struct_(struct_) {
+    var fields = map[String, PlumType]()
+    | TODO: check for duplicates
+    for field in struct_ do
+      fields.&.put(
+        field.name.string,
+        field.type.to_egg(toast, env, parent_calls, depth + 1)?
+      )
+    ok[PlumType, Error](PlumType.struct_(fields))
+  }
+  case enum_(enum_) {
+    var variants = map[String, Slice[PlumType]]()
+    for variant in enum_ do {
+      var payloads = list[PlumType]()
+      for payload in variant.payloads do
+        payloads.&.push(payload.to_egg(toast, env, parent_calls, depth + 1)?)
+      | TODO: check for duplicates
+      variants.&.put(variant.name.string, payloads.to_slice())
+    }
+    ok[PlumType, Error](PlumType.enum_(variants))
+  }
+  case lambda(lambda) {
+    var args = list[PlumType]()
+    for arg in lambda.args do
+      args.&.push(arg.to_egg(toast, env, parent_calls, depth + 1)?)
+    ok[PlumType, Error](PlumType.lambda(LambdaType {
+      args = args.to_slice(),
+      return_type = lambda.return_type
+        .to_egg(toast, env, parent_calls, depth + 1)?.put_on_heap(),
+    }))
+  }
+}
+
+fun create_builtin_fun(builtin: Builtin): EggFun {
+  var signature = builtin.signature()
+  EggFun {
+    name = "builtin_{builtin}" @ invalid_src(),
+    params = signature.params,
+    return_type = signature.return_type,
+    impl = EggFunImpl.builtin(builtin),
+  }
+}
+
+struct EggCodeCompiler { toast: Toast, exprs: List[EggExpr] }
+struct EggBodyCompiler {
+  parent: &EggCodeCompiler, params: List[EggId], exprs: List[EggId]
+}
+fun egg_code_compiler(toast: Toast): _ {
+  EggCodeCompiler { toast, exprs = list[EggExpr]() }
+}
+fun egg_body_compiler(parent: &EggCodeCompiler): _ {
+  EggBodyCompiler { parent, params = list[EggId](), exprs = list[EggId]() }
+}
+fun finish(body: EggBodyCompiler, id: EggId): EggBody {
+  EggBody {
+    params = body.params.to_slice(), exprs = body.exprs.to_slice(), returns = id
+  }
+}
+fun push_param(body: &EggBodyCompiler, src: Src): EggId {
+  var id = EggId { int = body.parent.exprs.len }
+  body.parent.exprs.&.push(EggExprKind.param @ src)
+  body.params.&.push(id)
+  id
+}
+fun push(body: &EggBodyCompiler, expr: EggExpr): EggId {
+  var id = EggId { int = body.parent.exprs.len }
+  body.parent.exprs.&.push(expr)
+  body.exprs.&.push(id)
+  id
+}
+
+fun to_egg(
+  toast: ToastExpr, body: &EggBodyCompiler, visible: &Visible
+): Result[EggId, Error] {
+  ok[EggId, Error](
+    switch toast
+    case int(int) body.push(EggExprKind.int(int.int) @ int.src)
+    case string(string) body.push(EggExprKind.string(string.string) @ string.src)
+    case struct_(struct_) {
+      var fields = map[String, EggId]()
+      | TODO: check for duplicates
+      for field in struct_.fields do
+        fields.&.put(field.name.string, field.value.to_egg(body, visible)?)
+      body.push(EggExprKind.struct_(fields) @ struct_.ampersand.src)
+    }
+    case member(member) {
+      var of = member.of.to_egg(body, visible)?
+      body.push(EggExprKind.member(EggMember {
+        of, name = member.name.string
+      }) @ member.name.src)
+    }
+    case symbol(symbol) body.push(EggExprKind.symbol(symbol.string) @ symbol.src)
+    case switch_(switch_) {
+      var condition = switch_.condition.to_egg(body, visible)?
+      var cases = map[String, EggBody]()
+      for case_ in switch_.cases do {
+        var snapshot = visible.snapshot()
+        var case_body = body.parent.egg_body_compiler().&
+        for payload in case_.payloads do
+          visible.define(payload.string, case_body.push_param(payload.src))
+        var returns = case_.body.to_egg(case_body, visible)?
+        var case_body = case_body.finish(returns)
+        visible.restore(snapshot)
+        cases.&.put(case_.symbol.string, case_body)
+      }
+      body.push(
+        EggExprKind.switch_(EggSwitch { condition, cases })
+          @ switch_.percent.src
+      )
+    }
+    case name(name)
+      visible.lookup(name.string) or
+        return error[EggId, Error](error(
+          "Unknown referenced name {name.string}.", name.src
+        ))
+    case lambda(lambda) {
+      var snapshot = visible.snapshot()
+      var lambda_body = body.parent.egg_body_compiler().&
+      for param in lambda.params do
+        visible.define(param.name.string, lambda_body.push_param(param.name.src))
+      var returns = lambda.body.to_egg(lambda_body, visible)?
+      var lambda_body = lambda_body.finish(returns)
+      visible.restore(snapshot)
+
+      body.push(EggExprKind.lambda(EggLambda {
+        params = {
+          var params = list[EggParam]()
+          for param in lambda.params do
+            params.&.push(param.name.string / param.type.to_egg(body.parent.toast)?)
+          params.to_slice()
+        },
+        body = lambda_body,
+      }) @ lambda.backslash.src)
+    }
+    case call(call) {
+      var args = list[EggId]()
+      for arg in call.args do args.&.push(arg.to_egg(body, visible)?)
+      var args = args.to_slice()
+
+      body.push({
+        switch call.function.*
+        case name(name) {
+          switch visible.lookup(name.string)
+          case some(lambda) EggExprKind.lambda_call(EggLambdaCall { lambda, args })
+          case none EggExprKind.call(EggCall { function = name, args })
+        }
+        case symbol(symbol)
+          EggExprKind.variant(EggVariant { symbol = symbol.string, payloads = args })
+        default {
+          var lambda = call.function.to_egg(body, visible)?
+          EggExprKind.lambda_call(EggLambdaCall { lambda, args })
+        }
+      } @ call.function.src())
+    }
+    case var_(var_) {
+      var name = var_.left.name or return error[EggId, Error](error(
+        "Variables have to be lowercase.", var_.equal_sign.src
+      ))
+
+      var value = var_.right.to_egg(body, visible)?
+      visible.define(name.string, value)
+      value
+    }
+    case body(exprs) {
+      var last = none[EggId]()
+      for expr in exprs do last = some(expr.to_egg(body, visible)?)
+      last or unreachable()
+    }
+  )
+}

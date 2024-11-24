@@ -3,10 +3,15 @@ import error.mar
 import formatting.mar
 import type.mar
 import builtins.mar
+import string_to_bacon.mar
 import bacon.mar
+import bacon_to_toast.mar
 import toast.mar
+import toast_to_egg.mar
 import egg.mar
+import egg_to_yogurt.mar
 import yogurt.mar
+import yogurt_to_waffle.mar
 import memory_layout.mar
 import waffle.mar
 import waffle_to_byte_code.mar
