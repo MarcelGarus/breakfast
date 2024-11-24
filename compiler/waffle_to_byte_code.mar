@@ -28,11 +28,12 @@ fun find_distance_from_top(builder: FunByteCodeBuilder, id: WaffleId): Int {
 }
 
 fun emit(builder: &FunByteCodeBuilder, instruction: ByteCodeInstruction) {
-  eprintln("Emitting {instruction}")
   if instruction is push_padding(amount) then if amount == 0 then return {}
   if instruction is pop(amount) then if amount == 0 then return {}
   if instruction is pop_below_top(amount) then if amount.b == 0 then return {}
 
+  if builder.instructions.data.len == builder.instructions.len then
+    panic("too many instructions ({builder.instructions.len})")
   builder.instructions.push(instruction)
   builder.stack_size = builder.stack_size + instruction.stack_size_diff()
 }
@@ -92,7 +93,8 @@ fun ref_of_next(instructions: List[ByteCodeInstruction]): &ByteCodeInstruction {
 
 fun to_byte_code(waffle: Waffle): Address {
   var instructions = list[ByteCodeInstruction]()
-  instructions.&.reserve_uninitialized(200) | TODO
+  instructions.&.reserve_uninitialized(1000) | TODO
+  instructions.len = 0
   var signature_to_address = map[WaffleSignature, Address]()
   var patches = list[Tuple2[&ByteCodeInstruction, WaffleSignature]]()
   var builder = ByteCodeBuilder {
