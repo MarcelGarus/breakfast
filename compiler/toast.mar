@@ -57,7 +57,7 @@ struct ToastCase {
 struct ToastLambda {
   backslash: StringAndSrc, params: Slice[ToastParam], body: &ToastExpr
 }
-struct ToastCall { receiver: &ToastExpr, args: Slice[ToastExpr] }
+struct ToastCall { function: &ToastExpr, args: Slice[ToastExpr] }
 struct ToastVar {
   left: &ToastExpr, equal_sign: StringAndSrc, right: &ToastExpr
 }
@@ -166,7 +166,7 @@ fun write[W](writer: W, expr: ToastExpr, indentation: Indentation) {
     writer.write(lambda.body.*, indentation + 1)
   }
   case call(call) {
-    writer.write(call.receiver.*, indentation)
+    writer.write(call.function.*, indentation)
     writer."\n"
     writer.write(call.args, indentation + 1)
   }
@@ -199,7 +199,7 @@ fun src(expr: ToastExpr): Src {
   }
   case name(name) name.src
   case lambda(lambda) lambda.backslash.src ... lambda.body.src()
-  case call(call) call.receiver.src() ... call.args.last().src()
+  case call(call) call.function.src() ... call.args.last().src()
   case var_(var_) var_.left.src() ... var_.right.src()
   case body(body) body.first().src() ... body.last().src()
 }
@@ -585,7 +585,7 @@ fun parse_unpiped_expr(parser: &LineParser): Result[Maybe[ToastExpr], Error] {
   loop args.&.push(parser.parse_atom()? or break)
   if args.is_not_empty() then
     expr = ToastExpr.call(ToastCall {
-      receiver = expr.put_on_heap(), args = args.to_slice()
+      function = expr.put_on_heap(), args = args.to_slice()
     })
 
   parsed(expr)
@@ -777,7 +777,7 @@ fun parse_expr(bacon: Bacon): Result[Maybe[ToastExpr], Error] {
     })
   } else if children.is_not_empty() then
     expr = ToastExpr.call(ToastCall {
-      receiver = expr.put_on_heap(), args = children
+      function = expr.put_on_heap(), args = children
     })
   parser.&.ensure_is_at_end()?
   parsed(expr)
@@ -803,11 +803,11 @@ fun piped_call(left: ToastExpr, piped_into: ToastExpr): ToastExpr {
     var args = list(left)
     for arg in call.args do args.&.push(arg)
     ToastExpr.call(ToastCall {
-      receiver = call.receiver, args = args.to_slice()
+      function = call.function, args = args.to_slice()
     })
   } else
     ToastExpr.call(ToastCall {
-      receiver = piped_into.put_on_heap(), args = list(left).to_slice()
+      function = piped_into.put_on_heap(), args = list(left).to_slice()
     })
 }
 

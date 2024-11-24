@@ -404,12 +404,12 @@ fun compile(
       builder.emit(ByteCodeInstruction.call(null))
       patches.push(tuple(
         builder.instructions.get_ref(builder.instructions.len - 1),
-        call.receiver
+        call.function
       ))
       builder.stack_size =
         builder.stack_size
         - layout.size
-        + yogurt.funs.get(call.receiver).return_type().memory_layout().size
+        + yogurt.funs.get(call.function).return_type().memory_layout().size
     }
     case instruction(instruction) {
       for arg in instruction.args do

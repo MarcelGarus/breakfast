@@ -46,7 +46,7 @@ struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
 struct YogurtTag { symbol: String, args: Slice[YogurtId] }
 struct YogurtLambda { function: YogurtSignature, captures: Slice[YogurtId] }
 struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
-struct YogurtCall { receiver: YogurtSignature, args: Slice[YogurtId] }
+struct YogurtCall { function: YogurtSignature, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
@@ -131,7 +131,7 @@ fun write[W](
     for arg in call.args do writer." {arg}"
   }
   case call(call) {
-    writer."call \"{call.receiver}\""
+    writer."call \"{call.function}\""
     for arg in call.args do writer." {arg}"
   }
   case instruction(instruction) {
@@ -348,7 +348,7 @@ fun to_yogurt(
           else {
             println("adding runtime cast at end of function from {actual_return_type} to {claimed_return_type}")
             YogurtOp.call(YogurtCall {
-              receiver = cast_fun, args = list(body.returns).to_slice()
+              function = cast_fun, args = list(body.returns).to_slice()
             }) $ claimed_return_type
           }
         )
@@ -525,7 +525,7 @@ fun to_yogurt(
             if case_expr.op is comptime(value)
             then YogurtOp.comptime(value.comptime_cast(common_type))
             else YogurtOp.call(YogurtCall {
-              receiver = compiler.yogurt.compile_cast_fun(case_type, common_type),
+              function = compiler.yogurt.compile_cast_fun(case_type, common_type),
               args = list(old_body.returns).to_slice()
             })
           } $ common_type)
@@ -660,7 +660,7 @@ fun to_yogurt(
 
       if comptime_result and false then {
         | body.push(builder.push(YogurtOp.lambda_call(YogurtCall {
-        |   receiver = yogurt_signature(name.string, arg_params), args
+        |   function = yogurt_signature(name.string, arg_params), args
         | }) $ type))
         | if compiled_fun.body.returns.int == -1 then {
         |   return error[YogurtId, Error](error(
@@ -681,7 +681,7 @@ fun to_yogurt(
       }
     }
     case call(call) {
-      var name = call.receiver
+      var name = call.function
 
       var args = list[YogurtId]()
       for arg in call.args do args.&.push(compiler.lookup(arg))
@@ -721,7 +721,7 @@ fun to_yogurt(
 
       if comptime_result then {
         var call_id = builder.push(YogurtOp.call(YogurtCall {
-          receiver = yogurt_signature(name.string, arg_params), args
+          function = yogurt_signature(name.string, arg_params), args
         }) $ type)
         if compiled_fun.body.returns.int == -1 then {
           return error[YogurtId, Error](error(
@@ -737,13 +737,13 @@ fun to_yogurt(
           builder.push(YogurtOp.comptime(value) $ type)
         }
         case none {
-          eprintln("Return value of {call.receiver.string} should be comptime known,but it's {returned_expr.op.debug()}")
+          eprintln("Return value of {call.function.string} should be comptime known,but it's {returned_expr.op.debug()}")
           call_id
         }
       } else {
         builder.push(
           YogurtOp.call(YogurtCall {
-            receiver = yogurt_signature(name.string, arg_params), args
+            function = yogurt_signature(name.string, arg_params), args
           }) $ type
         )
       }
@@ -1163,7 +1163,7 @@ fun compile_cast_fun_body(
         var from_arg_id = both.b
 
         to_args_ids.&.push(case_builder.&.push(YogurtOp.call(YogurtCall {
-          receiver = yogurt.compile_cast_fun(from_arg_type, to_arg_type),
+          function = yogurt.compile_cast_fun(from_arg_type, to_arg_type),
           args = list(from_arg_id).to_slice(),
         }) $ to_arg_type))
       }

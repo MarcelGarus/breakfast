@@ -46,7 +46,7 @@ struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
 struct EggTag { symbol: String, args: Slice[EggId] }
 struct EggLambda { params: Slice[EggParam], body: EggBody }
 struct EggLambdaCall { lambda: EggId, args: Slice[EggId] }
-struct EggCall { receiver: StringAndSrc, args: Slice[EggId] }
+struct EggCall { function: StringAndSrc, args: Slice[EggId] }
 
 fun /(name: String, type: PlumType): EggParam { EggParam { name, type } }
 
@@ -124,7 +124,7 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
     for arg in call.args do writer." {arg}"
   }
   case call(call) {
-    writer."call {call.receiver.string}"
+    writer."call {call.function.string}"
     for arg in call.args do writer." {arg}"
   }
 }
@@ -402,18 +402,18 @@ fun to_egg(
       var args = args.to_slice()
 
       body.push({
-        switch call.receiver.*
+        switch call.function.*
         case name(name) {
           switch visible.lookup(name.string)
           case some(lambda) EggExprKind.lambda_call(EggLambdaCall { lambda, args })
-          case none EggExprKind.call(EggCall { receiver = name, args })
+          case none EggExprKind.call(EggCall { function = name, args })
         }
         case symbol(symbol) EggExprKind.tag(EggTag { symbol = symbol.string, args })
         default {
-          var lambda = call.receiver.to_egg(body, visible)?
+          var lambda = call.function.to_egg(body, visible)?
           EggExprKind.lambda_call(EggLambdaCall { lambda, args })
         }
-      } @ call.receiver.src())
+      } @ call.function.src())
     }
     case var_(var_) {
       var name = var_.left.name or return error[EggId, Error](error(
