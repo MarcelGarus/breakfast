@@ -20,11 +20,11 @@ enum YogurtValueKind {
   int: Int,
   string: String,
   struct_: Map[String, YogurtValue],
-  tag: YogurtTagValue,
+  variant: YogurtVariantValue,
   lambda: YogurtLambdaValue,
   type: PlumType,
 }
-struct YogurtTagValue { symbol: String, payloads: Slice[YogurtValue] }
+struct YogurtVariantValue { symbol: String, payloads: Slice[YogurtValue] }
 struct YogurtLambdaValue {
   captures: Slice[YogurtValue], function: YogurtSignature
 }
@@ -35,7 +35,7 @@ enum YogurtOp {
   comptime: YogurtValue,
   struct_: Map[String, YogurtId],
   member: YogurtMember,
-  tag: YogurtTag,
+  variant: YogurtVariant,
   switch_: YogurtSwitch,
   lambda: YogurtLambda,
   lambda_call: YogurtLambdaCall,
@@ -44,7 +44,7 @@ enum YogurtOp {
 }
 struct YogurtMember { of: YogurtId, name: String }
 struct YogurtSwitch { condition: YogurtId, cases: Map[String, YogurtBody] }
-struct YogurtTag { symbol: String, payloads: Slice[YogurtId] }
+struct YogurtVariant { symbol: String, payloads: Slice[YogurtId] }
 struct YogurtLambda { function: YogurtSignature, captures: Slice[YogurtId] }
 struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
 struct YogurtCall { function: YogurtSignature, args: Slice[YogurtId] }
@@ -109,9 +109,9 @@ fun write[W](
     for field in struct_ do writer." {field.key}: {field.value}"
   }
   case member(member) writer."{member.of}.{member.name}"
-  case tag(tag) {
-    writer."tag {tag.symbol}"
-    for payload in tag.payloads do writer." {payload}"
+  case variant(variant) {
+    writer."variant {variant.symbol}"
+    for payload in variant.payloads do writer." {payload}"
   }
   case switch_(switch_) {
     writer."switch {switch_.condition}"
@@ -149,9 +149,9 @@ fun write[W](writer: W, value: YogurtValue) {
     for field in struct_ do writer." {field.key}: {field.value}"
     writer.")"
   }
-  case tag(tag) {
-    writer."({tag.symbol}"
-    for payload in tag.payloads do writer." {payload}"
+  case variant(variant) {
+    writer."({variant.symbol}"
+    for payload in variant.payloads do writer." {payload}"
     writer.")"
   }
   case lambda(lambda) {
@@ -237,15 +237,15 @@ fun yogurt_value_type(type: PlumType): YogurtValue {
   YogurtValueKind.type(type) $ type_type
 }
 fun yogurt_value_symbol(symbol: String): YogurtValue {
-  YogurtValueKind.tag(YogurtTagValue {
+  YogurtValueKind.variant(YogurtVariantValue {
     symbol, payloads = empty_slice[YogurtValue]()
   }) $ PlumType.enum_(map(symbol -> empty_slice[PlumType]()))
 }
 fun yogurt_value_list(items: Slice[YogurtValue], item_type: PlumType): YogurtValue {
   println("building comptime list of items: {items}")
-  YogurtValueKind.tag(
+  YogurtValueKind.variant(
     if items.get_maybe(0) is some(item) then
-      YogurtTagValue {
+      YogurtVariantValue {
         symbol = "More",
         payloads = list(
           item,
@@ -253,7 +253,7 @@ fun yogurt_value_list(items: Slice[YogurtValue], item_type: PlumType): YogurtVal
         ).to_slice()
       }
     else
-      YogurtTagValue { symbol = "Empty", payloads = empty_slice[YogurtValue]() }
+      YogurtVariantValue { symbol = "Empty", payloads = empty_slice[YogurtValue]() }
   ) $ type_list(item_type)
 }
 
@@ -498,7 +498,7 @@ fun to_yogurt(
         var params = list[YogurtParam]()
         for arg in variant.value do params.&.push(YogurtParam.runtime(arg))
         if condition_expr.op is comptime(value) then {
-          var value = value.kind.tag.unwrap()
+          var value = value.kind.variant.unwrap()
           if value.symbol == variant.key then {
             params.&.clear()
             for value in value.payloads do
@@ -542,7 +542,7 @@ fun to_yogurt(
       }
 
       if condition_expr.op is comptime(value) then {
-        var value = value.kind.tag.unwrap()
+        var value = value.kind.variant.unwrap()
         var variant = value.symbol
         var case_body = cases.get(variant)
         for id in case_body.params do body.push(id)
@@ -751,12 +751,12 @@ fun to_yogurt(
         )
       }
     }
-    case tag(tag) {
-      var symbol = tag.symbol
+    case variant(variant) {
+      var symbol = variant.symbol
 
       var payloads = list[YogurtId]()
       var payload_types = list[PlumType]()
-      for payload in tag.payloads do {
+      for payload in variant.payloads do {
         var payload = compiler.lookup(payload)
         var type = builder.get(payload).type
         payloads.&.push(payload)
@@ -772,7 +772,7 @@ fun to_yogurt(
 
       builder.push({
         if is_comptime
-        then YogurtOp.comptime(YogurtValueKind.tag(YogurtTagValue {
+        then YogurtOp.comptime(YogurtValueKind.variant(YogurtVariantValue {
           symbol,
           payloads = {
             var comptime_payloads = list[YogurtValue]()
@@ -781,7 +781,7 @@ fun to_yogurt(
             comptime_payloads.to_slice()
           }
         }) $ type)
-        else YogurtOp.tag(YogurtTag { symbol, payloads })
+        else YogurtOp.variant(YogurtVariant { symbol, payloads })
       } $ type)
     }
   body.push(id)
@@ -824,8 +824,8 @@ fun collect_captured(
     for field in struct_ do field.value.collect_captured(ignore, captured)
   case member(member) member.of.collect_captured(ignore, captured)
   case symbol {}
-  case tag(tag)
-    for payload in tag.payloads do payload.collect_captured(ignore, captured)
+  case variant(variant)
+    for payload in variant.payloads do payload.collect_captured(ignore, captured)
   case switch_(switch_) {
     switch_.condition.collect_captured(ignore, captured)
     for case_ in switch_.cases do
@@ -1032,7 +1032,7 @@ fun to_yogurt(
           case primitive(name) yogurt_value_symbol(name)
           case never yogurt_value_symbol("Never")
           case struct_(struct_)
-            YogurtValueKind.tag(YogurtTagValue {
+            YogurtValueKind.variant(YogurtVariantValue {
               symbol = "Struct",
               payloads = list(yogurt_value_list({
                 var fields = list[YogurtValue]()
@@ -1046,7 +1046,7 @@ fun to_yogurt(
               }, type_field)).to_slice()
             }) $ type_type_info
           case enum_(enum_)
-            YogurtValueKind.tag(YogurtTagValue {
+            YogurtValueKind.variant(YogurtVariantValue {
               symbol = "Enum",
               payloads = list(yogurt_value_list({
                 var variants = list[YogurtValue]()
@@ -1090,13 +1090,14 @@ fun comptime_cast(value: YogurtValue, type: PlumType): YogurtValue {
       fields
     }) $ type
   }
-  case tag(tag) {
-    YogurtValueKind.tag(YogurtTagValue {
-      symbol = tag.symbol,
+  case variant(variant) {
+    YogurtValueKind.variant(YogurtVariantValue {
+      symbol = variant.symbol,
       payloads = {
         var payloads = list[YogurtValue]()
-        var payload_types = type.extend_one_level().enum_.unwrap().get(tag.symbol)
-        for both in zip(tag.payloads.iter(), payload_types.iter()) do
+        var payload_types =
+          type.extend_one_level().enum_.unwrap().get(variant.symbol)
+        for both in zip(variant.payloads.iter(), payload_types.iter()) do
           payloads.&.push(both.a.comptime_cast(both.b))
         payloads.to_slice()
       }
@@ -1183,7 +1184,7 @@ fun compile_cast_fun_body(
         }) $ to_payload_type))
       }
 
-      var cast = case_builder.&.push(YogurtOp.tag(YogurtTag {
+      var cast = case_builder.&.push(YogurtOp.variant(YogurtVariant {
         symbol = variant, payloads = to_payloads_ids.to_slice()
       }) $ to)
 

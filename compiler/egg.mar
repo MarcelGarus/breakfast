@@ -35,7 +35,7 @@ enum EggExprKind {
   struct_: Map[String, EggId],
   member: EggMember,
   symbol: String,
-  tag: EggTag,
+  variant: EggVariant,
   switch_: EggSwitch,
   lambda: EggLambda,
   lambda_call: EggLambdaCall,
@@ -43,7 +43,7 @@ enum EggExprKind {
 }
 struct EggMember { of: EggId, name: String }
 struct EggSwitch { condition: EggId, cases: Map[String, EggBody] }
-struct EggTag { symbol: String, payloads: Slice[EggId] }
+struct EggVariant { symbol: String, payloads: Slice[EggId] }
 struct EggLambda { params: Slice[EggParam], body: EggBody }
 struct EggLambdaCall { lambda: EggId, args: Slice[EggId] }
 struct EggCall { function: StringAndSrc, args: Slice[EggId] }
@@ -100,9 +100,9 @@ fun write[W](writer: W, expr: EggExpr, code: EggCode, indentation: Int) {
   }
   case member(member) writer."{member.of}.{member.name}"
   case symbol(symbol) writer."symbol {symbol}"
-  case tag(tag) {
-    writer."tag {tag.symbol}"
-    for payload in tag.payloads do writer." {payload}"
+  case variant(variant) {
+    writer."variant {variant.symbol}"
+    for payload in variant.payloads do writer." {payload}"
   }
   case switch_(switch_) {
     writer."switch {switch_.condition}"
@@ -409,7 +409,7 @@ fun to_egg(
           case none EggExprKind.call(EggCall { function = name, args })
         }
         case symbol(symbol)
-          EggExprKind.tag(EggTag { symbol = symbol.string, payloads = args })
+          EggExprKind.variant(EggVariant { symbol = symbol.string, payloads = args })
         default {
           var lambda = call.function.to_egg(body, visible)?
           EggExprKind.lambda_call(EggLambdaCall { lambda, args })

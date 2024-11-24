@@ -367,14 +367,14 @@ fun to_waffle(value: YogurtValue): WaffleExpr {
       )
     waffle_aggregate(parts.to_slice())
   }
-  case tag(tag) {
-    var layout = value.type.memory_layout_enum().variants.get(tag.symbol)
+  case variant(variant) {
+    var layout = value.type.memory_layout_enum().variants.get(variant.symbol)
     var parts = list[WaffleExpr]()
     for part in layout.parts do
       parts.&.push(
         switch part
         case padding(amount) waffle_padding(amount)
-        case payload(index) tag.payloads.get(index).to_waffle()
+        case payload(index) variant.payloads.get(index).to_waffle()
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
@@ -415,15 +415,14 @@ fun to_waffle(
       field_layout.alignment,
     )
   }
-  | TODO: terminology: tag vs. variant
-  case tag(tag) {
-    var layout = expr.type.memory_layout_enum().variants.get(tag.symbol)
+  case variant(variant) {
+    var layout = expr.type.memory_layout_enum().variants.get(variant.symbol)
     var parts = list[WaffleExpr]()
     for part in layout.parts do
       parts.&.push(
         switch part
         case padding(amount) waffle_padding(amount)
-        case payload(index) yogurt_id_to_waffle_expr.get(tag.payloads.get(index))
+        case payload(index) yogurt_id_to_waffle_expr.get(variant.payloads.get(index))
         case tag(byte) waffle_byte(byte)
       )
     waffle_aggregate(parts.to_slice())
