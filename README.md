@@ -34,14 +34,14 @@ get list: (List t) index: Int -> t = ...
 get map: (Map k v) key: k -> v = ...
 
 parse json: Json target: Type -> target =
-  % type_info target
-    Int:
-      % json
-        Int int: int
+  type_info target
+  % Int:
+      json
+      % Int int: int
         else: crash "Expected int, found other stuff."
     Struct fields:
-      % json
-        Map map:
+      json
+      % Map map:
           ...
         else: crash ...
 ```
