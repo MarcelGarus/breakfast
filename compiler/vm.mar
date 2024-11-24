@@ -22,7 +22,7 @@
 | The endianness of ints and the stack direction are undefined. Other
 | implementations of this byte code are free to chose whatever they want. In
 | particular, this means that byte code SHOULD NOT depend on these things. For
-| example, you should not push_64(5) and then use pop_8() to pop individual
+| example, you should not push_8(5) and then use pop_8() to pop individual
 | bytes.
 
 import plum.mar
@@ -35,10 +35,10 @@ struct Vm {
 enum ByteCodeInstruction {
   | stack stuff
   push_padding: Int, | pushes the given amount of padding bytes to the stack
-  push_8: Byte,
-  push_64: Int,
+  push_1: Byte,
+  push_8: Int,
+  push_1_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
   push_8_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
-  push_64_from_stack: Int, | offset from the top of the stack (0 = top, etc.)
   pop: Int, | pops the amount
   pop_below_top: Tuple2[Int, Int], | (skip, amount). pops amount bytes below the top skip bytes
   | control flow stuff
@@ -47,21 +47,21 @@ enum ByteCodeInstruction {
   call: Address, | calls another function. TODO: runtime-known address?
   ret, | returns from a function call
   | arithmetic stuff
-  add_64, | pops two 64-bit ints, adds them, pushes the result as a 64-bit int
-  sub_64, | pops two 64-bit ints, subtracts them, pushes the result as a 64-bit int
-  mul_64, | pops two 64-bit ints, multiplies them, pushes the result as a 64-bit int
-  div_64, | pops two 64-bit ints, divides them, pushes the result as a 64-bit int
-  mod_64, | pops two 64-bit ints, mods them, pushes the result as a 64-bit int
+  add_8, | pops two 64-bit ints, adds them, pushes the result as a 64-bit int
+  sub_8, | pops two 64-bit ints, subtracts them, pushes the result as a 64-bit int
+  mul_8, | pops two 64-bit ints, multiplies them, pushes the result as a 64-bit int
+  div_8, | pops two 64-bit ints, divides them, pushes the result as a 64-bit int
+  mod_8, | pops two 64-bit ints, mods them, pushes the result as a 64-bit int
   | binary stuff
-  and_64, | pops two 64-bit ints, ands them, pushes the result as a 64-bit int
-  or_64, | pops two 64-bit ints, ors them, pushes the result as a 64-bit int
-  xor_64, | pops two 64-bit ints, xors them, pushes the result as a 64-bit int
+  and_8, | pops two 64-bit ints, ands them, pushes the result as a 64-bit int
+  or_8, | pops two 64-bit ints, ors them, pushes the result as a 64-bit int
+  xor_8, | pops two 64-bit ints, xors them, pushes the result as a 64-bit int
   | memory stuff
   malloc, | pops alignment (8-bit), size (64-bit), pushes address (64 bits)
-  store_8, | pops byte (8-bit), pops address (64-bit), stores byte to that address
-  store_64, | pops int (64-bit), pops address (64-bit), stores int to that address
-  load_8, | pops address (64-bit), loads byte from that address, pushes that byte
-  load_64, | pops address (64-bit), loads int from that address, pushes that int
+  store_1, | pops byte (8-bit), pops address (64-bit), stores byte to that address
+  store_8, | pops int (64-bit), pops address (64-bit), stores int to that address
+  load_1, | pops address (64-bit), loads byte from that address, pushes that byte
+  load_8, | pops address (64-bit), loads int from that address, pushes that int
   | error stuff
   crash,
 }
@@ -79,10 +79,10 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
   switch instruction
   case push_padding(amount)
     if amount == 0 then writer."// push_padding 0" else writer."push_padding {amount}"
-  case push_8(byte) writer."push_8 {byte}"
-  case push_64(int) writer."push_64 {int}"
+  case push_1(byte) writer."push_1 {byte}"
+  case push_8(int) writer."push_8 {int}"
+  case push_1_from_stack(offset) writer."push_1_from_stack {offset}"
   case push_8_from_stack(offset) writer."push_8_from_stack {offset}"
-  case push_64_from_stack(offset) writer."push_64_from_stack {offset}"
   case pop(amount) if amount == 0 then writer."// pop 0" else writer."pop {amount}"
   case pop_below_top(tuple)
     if tuple.b == 0 then writer."// pop_below_top {tuple.a} {tuple.b}" else
@@ -94,19 +94,19 @@ fun write[W](writer: W, instruction: ByteCodeInstruction) {
   }
   case call(target) writer."call {target}"
   case ret writer."ret"
-  case add_64 writer."add_64"
-  case sub_64 writer."sub_64"
-  case mul_64 writer."mul_64"
-  case div_64 writer."div_64"
-  case mod_64 writer."mod_64"
-  case and_64 writer."and_64"
-  case or_64 writer."or_64"
-  case xor_64 writer."xor_64"
+  case add_8 writer."add_8"
+  case sub_8 writer."sub_8"
+  case mul_8 writer."mul_8"
+  case div_8 writer."div_8"
+  case mod_8 writer."mod_8"
+  case and_8 writer."and_8"
+  case or_8 writer."or_8"
+  case xor_8 writer."xor_8"
   case malloc writer."malloc"
+  case store_1 writer."store_1"
   case store_8 writer."store_8"
-  case store_64 writer."store_64"
+  case load_1 writer."load_1"
   case load_8 writer."load_8"
-  case load_64 writer."load_64"
   case crash writer."crash"
 }
 
@@ -137,20 +137,20 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     var instruction = current_call.*.to_reference[ByteCodeInstruction]().*
     current_call += stride_size_of[ByteCodeInstruction]()
 
-    stdout."{vm}"
+    | stdout."{vm}\n"
     println("running {instruction.debug()}")
 
     switch instruction
     case push_padding(amount) {
       for i in 0..amount do vm.data_stack.&.push(16#aa.lower_byte())
     }
-    case push_8(byte) vm.data_stack.&.push(byte)
-    case push_64(word) vm.&.push_int(word)
-    case push_8_from_stack(offset) {
+    case push_1(byte) vm.data_stack.&.push(byte)
+    case push_8(word) vm.&.push_int(word)
+    case push_1_from_stack(offset) {
       var byte = vm.data_stack.get(vm.data_stack.len - 1 - offset)
       vm.data_stack.&.push(byte)
     }
-    case push_64_from_stack(offset) {
+    case push_8_from_stack(offset) {
       var start = vm.data_stack.len - 8 - offset
       for i in 0..8 do vm.data_stack.&.push(vm.data_stack.get(start + i))
     }
@@ -167,35 +167,35 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     }
     case call(target) vm.call_stack.&.push(target)
     case ret vm.call_stack.&.pop().ignore()
-    case add_64 vm.&.push_int(vm.&.pop_int() + vm.&.pop_int())
-    case sub_64 vm.&.push_int(vm.&.pop_int() - vm.&.pop_int())
-    case mul_64 vm.&.push_int(vm.&.pop_int() * vm.&.pop_int())
-    case div_64 vm.&.push_int(vm.&.pop_int() / vm.&.pop_int())
-    case mod_64 vm.&.push_int(vm.&.pop_int() % vm.&.pop_int())
-    case and_64 vm.&.push_int(vm.&.pop_int() & vm.&.pop_int())
-    case or_64 vm.&.push_int(or(vm.&.pop_int(), vm.&.pop_int()))
-    case xor_64 vm.&.push_int(vm.&.pop_int() ^ vm.&.pop_int())
+    case add_8 vm.&.push_int(vm.&.pop_int() + vm.&.pop_int())
+    case sub_8 vm.&.push_int(vm.&.pop_int() - vm.&.pop_int())
+    case mul_8 vm.&.push_int(vm.&.pop_int() * vm.&.pop_int())
+    case div_8 vm.&.push_int(vm.&.pop_int() / vm.&.pop_int())
+    case mod_8 vm.&.push_int(vm.&.pop_int() % vm.&.pop_int())
+    case and_8 vm.&.push_int(vm.&.pop_int() & vm.&.pop_int())
+    case or_8 vm.&.push_int(or(vm.&.pop_int(), vm.&.pop_int()))
+    case xor_8 vm.&.push_int(vm.&.pop_int() ^ vm.&.pop_int())
     case malloc {
       var alignment = vm.data_stack.&.pop().to_int()
       var size = vm.&.pop_int()
       var address = malloc(size, alignment)
       vm.&.push_int(address.cast[Address, Int]())
     }
-    case store_8 {
+    case store_1 {
       var byte = vm.data_stack.&.pop()
       var address = vm.&.pop_int().cast[Int, Address]()
       address.to_reference[Byte]().* = byte
     }
-    case store_64 {
+    case store_8 {
       var int = vm.&.pop_int()
       var address = vm.&.pop_int().cast[Int, Address]()
       address.to_reference[Int]().* = int
     }
-    case load_8 {
+    case load_1 {
       var address = vm.&.pop_int().cast[Int, Address]()
       vm.data_stack.&.push(address.to_reference[Byte]().*)
     }
-    case load_64 {
+    case load_8 {
       var address = vm.&.pop_int().cast[Int, Address]()
       vm.&.push_int(address.to_reference[Int]().*)
     }

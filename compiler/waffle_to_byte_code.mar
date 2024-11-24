@@ -40,29 +40,29 @@ fun emit(builder: &FunByteCodeBuilder, instruction: ByteCodeInstruction) {
 fun stack_size_diff(instruction: ByteCodeInstruction): Int {
   switch instruction
   case push_padding(amount) amount
-  case push_8 1
-  case push_64 8
-  case push_8_from_stack 1
-  case push_64_from_stack 8
+  case push_1 1
+  case push_8 8
+  case push_1_from_stack 1
+  case push_8_from_stack 8
   case pop(amount) 0 - amount
   case pop_below_top(tuple) 0 - tuple.b
   case jump 0
   case jump_table -1
   case call 0 | Note: You need to udpate this manually
   case ret 0
-  case add_64 -8
-  case sub_64 -8
-  case mul_64 -8
-  case div_64 -8
-  case mod_64 -8
-  case and_64 -8
-  case or_64 -8
-  case xor_64 -8
+  case add_8 -8
+  case sub_8 -8
+  case mul_8 -8
+  case div_8 -8
+  case mod_8 -8
+  case and_8 -8
+  case or_8 -8
+  case xor_8 -8
   case malloc -1
-  case store_8 -9
-  case store_64 -16
-  case load_8 -7
-  case load_64 0
+  case store_1 -9
+  case store_8 -16
+  case load_1 -7
+  case load_8 0
   case crash todo("stack size of crash")
 }
 
@@ -75,11 +75,11 @@ fun copy_from_stack(builder: &FunByteCodeBuilder, offset: Int, size: Int) {
   if size > offset then
     panic("called copy_from_stack with offset {offset}, but size {size}")
   loop if size < 8 then break else {
-    builder.emit(ByteCodeInstruction.push_64_from_stack(offset - 8))
+    builder.emit(ByteCodeInstruction.push_8_from_stack(offset - 8))
     size = size - 8
   }
   for byte in 0..size do
-    builder.emit(ByteCodeInstruction.push_8_from_stack(offset - 1))
+    builder.emit(ByteCodeInstruction.push_1_from_stack(offset - 1))
 }
 fun copy_from_stack(builder: &FunByteCodeBuilder, id: WaffleId, size: Int) {
   builder.copy_from_stack(builder.find_distance_from_top(id), size)
@@ -158,8 +158,8 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
   switch expr.kind
   case param unreachable()
   case padding(amount) builder.emit(ByteCodeInstruction.push_padding(amount))
-  case byte(byte) builder.emit(ByteCodeInstruction.push_8(byte))
-  case word(word) builder.emit(ByteCodeInstruction.push_64(word))
+  case byte(byte) builder.emit(ByteCodeInstruction.push_1(byte))
+  case word(word) builder.emit(ByteCodeInstruction.push_8(word))
   case local(local) builder.copy_from_stack(local, expr.size)
   case aggregate(aggregate) for field in aggregate do field.compile(builder)
   case member(member) {
@@ -199,14 +199,14 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
     builder.stack_size = builder.stack_size - call.args.size + expr.size
     builder.emit(ByteCodeInstruction.pop_below_top(tuple(expr.size, padding)))
   }
-  case add_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.add_64) }
-  case sub_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.sub_64) }
-  case mul_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.mul_64) }
-  case div_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.div_64) }
-  case mod_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.mod_64) }
-  case and_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.and_64) }
-  case or_64(args)  { args.compile(builder) builder.emit(ByteCodeInstruction.or_64) }
-  case xor_64(args) { args.compile(builder) builder.emit(ByteCodeInstruction.xor_64) }
+  case add(args) { args.compile(builder) builder.emit(ByteCodeInstruction.add_8) }
+  case sub(args) { args.compile(builder) builder.emit(ByteCodeInstruction.sub_8) }
+  case mul(args) { args.compile(builder) builder.emit(ByteCodeInstruction.mul_8) }
+  case div(args) { args.compile(builder) builder.emit(ByteCodeInstruction.div_8) }
+  case mod(args) { args.compile(builder) builder.emit(ByteCodeInstruction.mod_8) }
+  case and_(args) { args.compile(builder) builder.emit(ByteCodeInstruction.and_8) }
+  case or_(args)  { args.compile(builder) builder.emit(ByteCodeInstruction.or_8) }
+  case xor(args) { args.compile(builder) builder.emit(ByteCodeInstruction.xor_8) }
   case box(data) {
     var padding_before_data = builder.align_to(8)
 
@@ -217,34 +217,34 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
 
     | Allocate memory for the data.
     var ptr_start = builder.stack_size
-    builder.emit(ByteCodeInstruction.push_64(data.size))
-    builder.emit(ByteCodeInstruction.push_8(data.alignment.lower_byte()))
+    builder.emit(ByteCodeInstruction.push_8(data.size))
+    builder.emit(ByteCodeInstruction.push_1(data.alignment.lower_byte()))
     builder.emit(ByteCodeInstruction.malloc)
 
     | Copy the data to the heap.
     var cursor = 0
     loop if cursor + 8 > data.size then break else {
-      builder.emit(ByteCodeInstruction.push_64_from_stack(
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
         builder.stack_size - ptr_start - 8
       ))
-      builder.emit(ByteCodeInstruction.push_64(cursor))
-      builder.emit(ByteCodeInstruction.add_64)
-      builder.emit(ByteCodeInstruction.push_64_from_stack(
+      builder.emit(ByteCodeInstruction.push_8(cursor))
+      builder.emit(ByteCodeInstruction.add_8)
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
         builder.stack_size - {data_start + cursor} - 8
       ))
-      builder.emit(ByteCodeInstruction.store_64)
+      builder.emit(ByteCodeInstruction.store_8)
       cursor = cursor + 8
     }
     loop if cursor == data.size then break else {
-      builder.emit(ByteCodeInstruction.push_64_from_stack(
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
         builder.stack_size - ptr_start - 8
       ))
-      builder.emit(ByteCodeInstruction.push_64(cursor))
-      builder.emit(ByteCodeInstruction.add_64)
-      builder.emit(ByteCodeInstruction.push_8_from_stack(
+      builder.emit(ByteCodeInstruction.push_8(cursor))
+      builder.emit(ByteCodeInstruction.add_8)
+      builder.emit(ByteCodeInstruction.push_1_from_stack(
         builder.stack_size - {data_start + cursor} - 1
       ))
-      builder.emit(ByteCodeInstruction.store_8)
+      builder.emit(ByteCodeInstruction.store_1)
       cursor = cursor + 1
     }
     builder.emit(ByteCodeInstruction.pop_below_top(tuple(
@@ -261,22 +261,22 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
     var data_start = builder.stack_size
     var cursor = 0
     loop if cursor + 8 > expr.size then break else {
-      builder.emit(ByteCodeInstruction.push_64_from_stack(
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
         builder.stack_size - ptr_start - 8
       ))
-      builder.emit(ByteCodeInstruction.push_64(cursor))
-      builder.emit(ByteCodeInstruction.add_64)
-      builder.emit(ByteCodeInstruction.load_64) | TODO: alignment
+      builder.emit(ByteCodeInstruction.push_8(cursor))
+      builder.emit(ByteCodeInstruction.add_8)
+      builder.emit(ByteCodeInstruction.load_8) | TODO: alignment
       cursor = cursor + 8
     }
     loop if cursor == expr.size then break else {
       var padding = builder.align_to(8)
-      builder.emit(ByteCodeInstruction.push_64_from_stack(
+      builder.emit(ByteCodeInstruction.push_8_from_stack(
         builder.stack_size - ptr_start - 8
       ))
-      builder.emit(ByteCodeInstruction.push_64(cursor))
-      builder.emit(ByteCodeInstruction.add_64)
-      builder.emit(ByteCodeInstruction.load_8)
+      builder.emit(ByteCodeInstruction.push_8(cursor))
+      builder.emit(ByteCodeInstruction.add_8)
+      builder.emit(ByteCodeInstruction.load_1)
       builder.emit(ByteCodeInstruction.pop_below_top(tuple(1, padding)))
       cursor = cursor + 1
     }

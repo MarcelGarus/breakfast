@@ -45,14 +45,14 @@ enum WaffleExprKind {
   member: WaffleMember,
   switch_: WaffleSwitch,
   call: WaffleCall,
-  add_64: &WaffleExpr,
-  sub_64: &WaffleExpr,
-  mul_64: &WaffleExpr,
-  div_64: &WaffleExpr,
-  mod_64: &WaffleExpr,
-  and_64: &WaffleExpr,
-  or_64: &WaffleExpr,
-  xor_64: &WaffleExpr,
+  add: &WaffleExpr,
+  sub: &WaffleExpr,
+  mul: &WaffleExpr,
+  div: &WaffleExpr,
+  mod: &WaffleExpr,
+  and_: &WaffleExpr,
+  or_: &WaffleExpr,
+  xor: &WaffleExpr,
   box: &WaffleExpr,
   unbox: &WaffleExpr,
   crash: &WaffleExpr,
@@ -128,52 +128,52 @@ fun waffle_int_operands(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   right.is_word() or panic("int operands, but right is not an int 64")
   waffle_aggregate(list(left, right).to_slice())
 }
-fun waffle_add_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_add(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.add_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.add(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_sub_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_sub(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.sub_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.sub(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_mul_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_mul(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.mul_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.mul(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_div_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_div(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.div_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.div(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_mod_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_mod(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.mod_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.mod(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_and_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_and(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.and_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.and_(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_or_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_or(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.or_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.or_(waffle_int_operands(left, right).put_on_heap()),
   }
 }
-fun waffle_xor_64(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
+fun waffle_xor(left: WaffleExpr, right: WaffleExpr): WaffleExpr {
   WaffleExpr {
     size = 8, alignment = 8,
-    kind = WaffleExprKind.xor_64(waffle_int_operands(left, right).put_on_heap()),
+    kind = WaffleExprKind.xor(waffle_int_operands(left, right).put_on_heap()),
   }
 }
 fun waffle_box(expr: WaffleExpr): WaffleExpr {
@@ -313,43 +313,43 @@ fun write[W](
     writer.write(call.args.*, fun_, indentation)
     writer.")"
   }
-  case add_64(ops) {
-    writer."(add_64 "
+  case add(ops) {
+    writer."(add "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case sub_64(ops) {
-    writer."(sub_64 "
+  case sub(ops) {
+    writer."(sub "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case mul_64(ops) {
-    writer."(mul_64 "
+  case mul(ops) {
+    writer."(mul "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case div_64(ops) {
-    writer."(div_64 "
+  case div(ops) {
+    writer."(div "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case mod_64(ops) {
-    writer."(mod_64 "
+  case mod(ops) {
+    writer."(mod "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case and_64(ops) {
-    writer."(and_64 "
+  case and_(ops) {
+    writer."(and "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case or_64(ops) {
-    writer."(or_64 "
+  case or_(ops) {
+    writer."(or "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
-  case xor_64(ops) {
-    writer."(xor_64 "
+  case xor(ops) {
+    writer."(xor "
     writer.write(ops.*, fun_, indentation)
     writer.")"
   }
@@ -522,14 +522,14 @@ fun to_waffle(
     var args = instruction.args
 
     switch instruction.instruction
-    case add_ints       waffle_add_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case sub_ints       waffle_sub_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case mul_ints       waffle_mul_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case div_ints       waffle_div_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case mod_ints       waffle_mod_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case and_ints       waffle_and_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case or_ints        waffle_or_64(     yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
-    case xor_ints       waffle_xor_64(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case add_ints       waffle_add(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case sub_ints       waffle_sub(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case mul_ints       waffle_mul(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case div_ints       waffle_div(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case mod_ints       waffle_mod(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case and_ints       waffle_and(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case or_ints        waffle_or(     yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
+    case xor_ints       waffle_xor(    yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
     case compare_ints   todo("handle compare_ints")
     case concat_strings todo("handle concat_strings")
     case crash          waffle_crash(     yogurt_id_to_waffle_expr.get(args.get(0)), yogurt_id_to_waffle_expr.get(args.get(1)))
