@@ -67,7 +67,7 @@ struct ParamsLayout {
   parts: Slice[ParamsPart],
   param_to_offset: Map[Int, Int],
 }
-enum ParamsPart { arg: Int, padding: Int }
+enum ParamsPart { param: Int, padding: Int }
 
 fun memory_layout_params(params: Slice[PlumType]): ParamsLayout {
   var layouts = list[MemoryLayout]()
@@ -80,7 +80,7 @@ fun memory_layout_params(params: Slice[PlumType]): ParamsLayout {
     parts.&.push(
       switch part
       case padding(amount) ParamsPart.padding(amount)
-      case field(index) ParamsPart.arg(index)
+      case field(index) ParamsPart.param(index)
     )
 
   ParamsLayout {
