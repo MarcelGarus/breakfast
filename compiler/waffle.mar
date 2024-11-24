@@ -8,13 +8,11 @@
 | Structs have been converted into runs of expressions (shown using curly
 | braces). Enums have been converted into tagged unions.
 |
-| TODO: alignment
 | TODO: heap
-| TODO: reference counting
 |
 | main Int: @0:word
 |   | Creating and accessing a struct.
-|   | foo = & x: @0 y: 42
+|   | foo = & x: @0 y: 42   | & y: Int x: Int
 |   | foo.y
 |   @1 = {@0 42:word}.member(8)
 |   | Creating and switching on an enum.
@@ -45,7 +43,7 @@ enum WaffleExprKind {
   byte: Byte, | 8 bits
   word: Int,  | 64 bits
   local: WaffleId,
-  struct_: Slice[WaffleExpr],
+  struct_: Slice[WaffleExpr], | TODO: rename to aggregate
   member: WaffleMember,
   switch_: WaffleSwitch,
   call: WaffleCall,
@@ -112,6 +110,7 @@ fun waffle_switch(byte: WaffleExpr, cases: Slice[WaffleBody]): WaffleExpr {
     kind = WaffleExprKind.switch_(WaffleSwitch { byte = byte.put_on_heap(), cases })
   }
 }
+| The size and alignment are of the returned value, not the arguments.
 fun waffle_call(
   function: WaffleSignature, args: WaffleExpr, size: Int, alignment: Int
 ): WaffleExpr {
@@ -345,4 +344,207 @@ fun write[W](
     writer.")"
   }
   writer."[size={expr.size},alignment={expr.alignment}]"
+}
+
+| Converting Yogurt to Waffle  
+
+fun to_waffle(
+  value: YogurtValue
+): WaffleExpr {
+  switch value.kind
+  case int(int) waffle_word(int)
+  case string(string)
+    waffle_struct(list(
+      waffle_word(string.data.to_int()),
+      waffle_word(string.len),
+    ).to_slice())
+  case struct_(fields) {
+    var layout = value.type.memory_layout_struct()
+    var parts = list[WaffleExpr]()
+    for part in layout.parts do
+      parts.&.push(
+        switch part
+        case padding(amount) waffle_padding(amount)
+        case field(name) fields.get(name).to_waffle()
+      )
+    waffle_struct(parts.to_slice())
+  }
+  case tag(tag) {
+    var layout = value.type.memory_layout_enum().variants.get(tag.a)
+    var parts = list[WaffleExpr]()
+    for part in layout.parts do
+      parts.&.push(
+        switch part
+        case padding(amount) waffle_padding(amount)
+        case arg(index) tag.b.get(index).to_waffle()
+        case tag(byte) waffle_byte(byte)
+      )
+    waffle_struct(parts.to_slice())
+  }
+  case lambda todo()
+  case type todo()
+}
+
+fun to_waffle(
+  expr: YogurtExpr,
+  fun_: YogurtFun, fun_builder: &WaffleFunBuilder,
+  yogurt_id_to_waffle_expr: &Map[YogurtId, WaffleExpr],
+  yogurt: Yogurt,
+): WaffleExpr {
+  switch expr.op
+  case param unreachable()
+  case uninitialized unreachable()
+  case comptime(value) {
+    value.to_waffle()
+  }
+  case struct_(struct_) {
+    var layout = expr.type.memory_layout_struct()
+    var parts = list[WaffleExpr]()
+    for part in layout.parts do
+      parts.&.push(
+        switch part
+        case field(name) yogurt_id_to_waffle_expr.get(struct_.get(name))
+        case padding(amount) waffle_padding(amount)
+      )
+    waffle_struct(parts.to_slice())
+  }
+  case member(member) {
+    var struct_layout = fun_.get(member.of).type.memory_layout_struct()
+    var field_layout = expr.type.memory_layout()
+    yogurt_id_to_waffle_expr.get(member.of).waffle_member(
+      struct_layout.field_to_offset.get(member.name),
+      field_layout.size,
+      field_layout.alignment,
+    )
+  }
+  | TODO: terminology: tag vs. variant
+  case tag(tag) {
+    var layout = expr.type.memory_layout_enum().variants.get(tag.symbol)
+    var parts = list[WaffleExpr]()
+    for part in layout.parts do
+      parts.&.push(
+        switch part
+        case padding(amount) waffle_padding(amount)
+        case arg(index) yogurt_id_to_waffle_expr.get(tag.args.get(index))
+        case tag(byte) waffle_byte(byte)
+      )
+    waffle_struct(parts.to_slice())
+  }
+  case switch_(switch_) {
+    var condition = yogurt_id_to_waffle_expr.get(switch_.condition)
+
+    var layout = fun_.get(switch_.condition).type.memory_layout_enum()
+
+    for variant_layout in layout.variants do {
+      var payloads = switch_.cases.get(variant_layout.key).params
+      for payload in payloads.iter().enumerate() do {
+        var id = payload.item
+        var payload_layout = fun_.get(id).type.memory_layout()
+        yogurt_id_to_waffle_expr.put(
+          id,
+          condition.waffle_member(
+            variant_layout.value.offsets.get(payload.index),
+            payload_layout.size, payload_layout.alignment,
+          )
+        )
+      }
+    }
+
+    var cases = uninitialized_slice[WaffleBody](layout.tag_to_variant.size)
+    for entry in layout.tag_to_variant do
+      cases.&.set(
+        entry.key.to_int(),
+        switch_.cases.get(entry.value)
+          .to_waffle(fun_, fun_builder, yogurt_id_to_waffle_expr, yogurt)
+      )
+
+    waffle_switch(
+      condition.waffle_member(layout.tag_offset, 1, 1),
+      cases,
+    )
+  }
+  case lambda(lambda) todo("implement lambda")
+  case lambda_call(call) todo("implement lambda call")
+  case call(call) {
+    var arg_types = list[PlumType]()
+    for arg in call.args do arg_types.&.push(fun_.get(arg).type)
+    var arg_layout = arg_types.to_slice().memory_layout_params()
+
+    var parts = list[WaffleExpr]()
+    for part in arg_layout.parts do
+      parts.&.push(
+        switch part
+        case padding(amount) waffle_padding(amount)
+        case arg(index) yogurt_id_to_waffle_expr.get(call.args.get(index))
+      )
+    var args = waffle_struct(parts.to_slice())
+
+    var return_layout = yogurt.funs.get(call.receiver).return_type().memory_layout()
+
+    waffle_call(
+      WaffleSignature { string = call.receiver.str }, args,
+      return_layout.size, return_layout.alignment,
+    )
+  }
+  case instruction(instructions) todo("implement instruction")
+}
+
+
+fun to_waffle(
+  body: YogurtBody,
+  fun_: YogurtFun, fun_builder: &WaffleFunBuilder,
+  yogurt_id_to_waffle_expr: &Map[YogurtId, WaffleExpr],
+  yogurt: Yogurt,
+): WaffleBody {
+  var builder = fun_builder.&.body()
+  for id in body.exprs do {
+    var expr = builder.&.local(
+      fun_.get(id).to_waffle(fun_, fun_builder, yogurt_id_to_waffle_expr, yogurt)
+    )
+    yogurt_id_to_waffle_expr.&.put(id, expr)
+  }
+  builder.returns(yogurt_id_to_waffle_expr.get(body.returns))
+}
+
+fun to_waffle(fun_: YogurtFun, yogurt: Yogurt): WaffleFun {
+  var params = list[YogurtId]()
+  for param in fun_.body.params do params.&.push(param)
+  var params = params.to_slice()
+
+  var param_types = list[PlumType]()
+  for param in params do param_types.&.push(fun_.get(param).type)
+  var param_layout = param_types.to_slice().memory_layout_params()
+
+  var fun_builder = waffle_fun_builder(param_layout.size, param_layout.alignment)
+  var param_aggregate = waffle_local(
+    WaffleId { index = 0 }, param_layout.size, param_layout.alignment
+  )
+  var yogurt_id_to_waffle_expr = map[YogurtId, WaffleExpr]()
+  for param in params.iter().enumerate() do {
+    var layout = fun_.get(param.item).type.memory_layout()
+    yogurt_id_to_waffle_expr.&.put(
+      param.item,
+      param_aggregate.waffle_member(
+        param_layout.param_to_offset.get(param.index),
+        layout.size, layout.alignment,
+      )
+    )
+  }
+
+  var body = fun_.body.to_waffle(
+    fun_, fun_builder.&, yogurt_id_to_waffle_expr.&, yogurt
+  )
+  fun_builder.finish(body)
+}
+
+fun to_waffle(yogurt: Yogurt): Waffle {
+  var funs = map[WaffleSignature, WaffleFun]()
+  for fun_ in yogurt.funs do {
+    eprintln("Waffling {fun_.key}")
+    funs.&.put(
+      WaffleSignature { string = fun_.key.str },
+      fun_.value.to_waffle(yogurt),
+    )
+  }
+  Waffle { funs }
 }

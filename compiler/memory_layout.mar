@@ -1,124 +1,232 @@
 import plum.mar
 
-struct MemoryLayout { size: Int, alignment: Int, kind: MemoryLayoutKind }
-enum MemoryLayoutKind {
-  primitive,
-  struct_: StructLayout,
-  enum_: EnumLayout,
+struct MemoryLayout { size: Int, alignment: Int }
+
+struct AggregateLayout {
+  size: Int, alignment: Int,
+  parts: Slice[AggregatePart],
+  field_to_offset: Map[Int, Int],
 }
-struct StructLayout {
-  field_to_offset: Map[String, Int],
-  field_to_layout: Map[String, MemoryLayout],
-  fields_sorted_by_offset: Slice[String],
-}
-struct EnumLayout {
-  variants: Map[String, VariantLayout],
-  tag_layout: Maybe[TagLayout],
-}
-struct TagLayout {
-  offset_in_enum: Int,
-  num_to_variant: Slice[String],
-  variant_to_num: Map[String, Byte],
-}
-struct VariantLayout {
-  arg_offsets: Slice[Int],
-  arg_layouts:Slice[MemoryLayout],
-  args_sorted_by_offset: Slice[Int],
+enum AggregatePart { padding: Int, field: Int }
+
+| Is deterministic.
+fun layout_aggregate(fields: Slice[MemoryLayout]): AggregateLayout {
+  | TODO: make efficient by reordering fields
+
+  var size = 0
+  var alignment = 1
+  var parts = list[AggregatePart]()
+  var field_to_offset = map[Int, Int]()
+
+  for field in fields.iter().enumerate() do {
+    var index = field.index
+    var field = field.item
+
+    var size_before_padding = size
+    size = size.round_up_to_multiple_of(field.alignment)
+    if size_before_padding != size then
+      parts.&.push(AggregatePart.padding(size - size_before_padding))
+
+    field_to_offset.&.put(index, size)
+    parts.&.push(AggregatePart.field(index))
+    size = size + field.size
+
+    alignment = max(alignment, field.alignment)
+  }
+  AggregateLayout {
+    size, alignment, parts = parts.to_slice(), field_to_offset = field_to_offset
+  }
 }
 
-struct OffsetAndLayout { offset: Int, layout: MemoryLayout }
+| Layouting arbitrary types  
 
 fun memory_layout(type: PlumType): MemoryLayout {
   switch type
   case primitive(name) {
-    if name == "Int" then
-      MemoryLayout { size = 8, alignment = 8, kind = MemoryLayoutKind.primitive }
-    else if name == "String" then
-      MemoryLayout { size = 16, alignment = 8, kind = MemoryLayoutKind.primitive }
-    else
-      todo("handle mem layouting primitive type {name}")
+    if      name == "Int"    then MemoryLayout { size = 8,  alignment = 8 }
+    else if name == "String" then MemoryLayout { size = 16, alignment = 8 }
+    else todo("handle mem layouting primitive type {name}")
   }
-  case never MemoryLayout { size = 0, alignment = 0, kind = MemoryLayoutKind.primitive }
-  case struct_(struct_) {
-    var fields = list[String]()
-    for field in struct_ do fields.&.push(field.key)
-
-    | Layout the fields.
-    var field_layouts = list[MemoryLayout]()
-    for field in fields do
-      field_layouts.&.push(struct_.get(field).memory_layout())
-    var layout = field_layouts.to_slice().layout_efficiently()
-
-    | Calculate derived info.
-    var field_to_offset = map[String, Int]()
-    var field_to_layout = map[String, MemoryLayout]()
-    for field in fields.iter().enumerate() do {
-      var index = field.index
-      var field = field.item
-      field_to_offset.&.put(field, layout.input_to_offset.get(index))
-      field_to_layout.&.put(field, field_layouts.get(index))
-    }
-    var fields_sorted_by_offset = list[String]()
-    for index in layout.inputs_sorted_by_offset do
-      fields_sorted_by_offset.&.push(fields.get(index))
-
-    MemoryLayout {
-      size = layout.size,
-      alignment = layout.alignment,
-      kind = MemoryLayoutKind.struct_(StructLayout {
-        field_to_offset, field_to_layout,
-        fields_sorted_by_offset = fields_sorted_by_offset.to_slice()
-      }),
-    }
+  case never MemoryLayout { size = 0, alignment = 0 }
+  case struct_ {
+    var layout = type.memory_layout_struct()
+    MemoryLayout { size = layout.size, alignment = layout.alignment }
   }
   case enum_(enum_) {
-    var payload_size = 0
-    var payload_alignment = 1
-    var variants = map[String, VariantLayout]()
-    for variant in enum_ do {
-      | Layout the args.
-      var arg_layouts = list[MemoryLayout]()
-      for arg in variant.value do
-        arg_layouts.&.push(
-          if arg.is_recursive(1)
-          then MemoryLayout {
-            size = 8, alignment = 8, kind = MemoryLayoutKind.primitive
-          }
-          else arg.memory_layout()
-        )
-      var layout = arg_layouts.to_slice().layout_efficiently()
-
-      payload_size = max(payload_size, layout.size)
-      payload_alignment = max(payload_alignment, layout.alignment)
-      variants.&.put(variant.key, VariantLayout {
-        arg_offsets = layout.input_to_offset,
-        arg_layouts = arg_layouts.to_slice(),
-        args_sorted_by_offset = layout.inputs_sorted_by_offset,
-      })
-    }
-
-    var tag_layout = if enum_.size <= 1 then none[TagLayout]() else {
-      var num_to_variant = list[String]()
-      var variant_to_num = map[String, Byte]()
-      for variant in enum_.iter() do {
-        variant_to_num.&.put(variant.key, num_to_variant.len.lower_byte())
-        num_to_variant.&.push(variant.key)
-      }
-      some(TagLayout {
-        offset_in_enum = payload_size,
-        num_to_variant = num_to_variant.to_slice(), variant_to_num,
-      })
-    }
-
-    MemoryLayout {
-      size = payload_size + if tag_layout is some then 1 else 0,
-      alignment = payload_alignment,
-      kind = MemoryLayoutKind.enum_(EnumLayout { variants, tag_layout })
-    }
+    var layout = type.memory_layout_enum()
+    MemoryLayout { size = layout.size, alignment = layout.alignment }
   }
-  case lambda(lambda)
-    MemoryLayout { size = 16, alignment = 8, kind = MemoryLayoutKind.primitive }
+  case lambda(lambda) todo()
   case recursive unreachable()
+}
+
+| Layouting function parameters  
+
+struct ParamsLayout {
+  size: Int, alignment: Int,
+  parts: Slice[ParamsPart],
+  param_to_offset: Map[Int, Int],
+}
+enum ParamsPart { arg: Int, padding: Int }
+
+fun memory_layout_params(params: Slice[PlumType]): ParamsLayout {
+  var layouts = list[MemoryLayout]()
+  for param in params do
+    layouts.&.push(param.memory_layout())
+  var layout = layouts.to_slice().layout_aggregate()
+
+  var parts = list[ParamsPart]()
+  for part in layout.parts do
+    parts.&.push(
+      switch part
+      case padding(amount) ParamsPart.padding(amount)
+      case field(index) ParamsPart.arg(index)
+    )
+
+  ParamsLayout {
+    size = layout.size, alignment = layout.alignment,
+    parts = parts.to_slice(),
+    param_to_offset = layout.field_to_offset,
+  }
+}
+
+| Layouting structs  
+
+struct StructLayout {
+  size: Int, alignment: Int,
+  parts: Slice[StructPart],
+  field_to_offset: Map[String, Int],
+}
+enum StructPart { field: String, padding: Int }
+
+fun memory_layout_struct(type: PlumType): StructLayout {
+  var fields = type.struct_.unwrap()
+
+  | Order fields by name so that the memory layout is deterministic, even if
+  | multiple definitions of the struct use different orderings.
+  var field_names = list[String]()
+  for field in fields do field_names.&.push(field.key)
+  field_names.to_slice().&.sort()
+
+  | Layout the fields.
+  var field_layouts = list[MemoryLayout]()
+  for name in field_names do
+    field_layouts.&.push(fields.get(name).memory_layout())
+  var field_layouts = field_layouts.to_slice()
+
+  | Layout the fields efficiently.
+  var layout = field_layouts.layout_aggregate()
+
+  | Map AggregateLayout to StructLayout.
+  var parts = list[StructPart]()
+  for part in layout.parts do
+    parts.&.push(
+      switch part
+      case padding(amount) StructPart.padding(amount)
+      case field(index) StructPart.field(field_names.get(index))
+    )
+  var field_to_offset = map[String, Int]()
+  for entry in layout.field_to_offset do
+    field_to_offset.&.put(field_names.get(entry.key), entry.value)
+  StructLayout {
+    size = layout.size, alignment = layout.alignment,
+    parts = parts.to_slice(), field_to_offset,
+  }
+}
+
+| Layouting enums  
+
+| TODO: terminology: payload vs. args?
+struct EnumLayout {
+  size: Int,
+  alignment: Int,
+  variants: Map[String, VariantLayout],
+  tag_offset: Int,
+  tag_to_variant: Map[Byte, String],
+}
+struct VariantLayout {
+  parts: Slice[VariantPart],
+  offsets: Slice[Int],
+}
+enum VariantPart { arg: Int, padding: Int, tag: Byte }
+
+fun memory_layout_enum(type: PlumType): EnumLayout {
+  var variants = type.enum_.unwrap()
+
+  | Order variants by name so that the tags are chosen deterministically, even
+  | if multiple definitions of the enum use different orderings.
+  var variant_names = list[String]()
+  for variant in variants do variant_names.&.push(variant.key)
+  variant_names.to_slice().&.sort()
+
+  var tag_to_variant = map[Byte, String]()
+  for variant in variant_names.iter().enumerate() do
+    tag_to_variant.&.put(variant.index.lower_byte(), variant.item)
+
+  var variant_to_tag = map[String, Byte]()
+  for variant in variant_names.iter().enumerate() do
+    variant_to_tag.&.put(variant.item, variant.index.lower_byte())
+
+  var payload_aggregates = map[String, AggregateLayout]()
+  var max_payload_size = 0
+  var max_payload_alignment = 1
+
+  for variant in variants do {
+    | Layout the args.
+    var arg_layouts = list[MemoryLayout]()
+    for arg in variant.value do
+      arg_layouts.&.push(arg.memory_layout())
+    var arg_layouts = arg_layouts.to_slice()
+
+    | Layout the args efficiently.
+    var layout = arg_layouts.layout_aggregate()
+
+    | Update the global payload size and alignment.
+    max_payload_size = max(max_payload_size, layout.size)
+    max_payload_alignment = max(max_payload_alignment, layout.alignment)
+
+    payload_aggregates.&.put(variant.key, layout)
+  }
+
+  var variant_layouts = map[String, VariantLayout]()
+
+  for variant in variants do {
+    var layout = payload_aggregates.get(variant.key)
+
+    | Map parts.
+    var parts = list[VariantPart]()
+    for part in layout.parts do
+      parts.&.push(
+        switch part
+        case padding(amount) VariantPart.padding(amount)
+        case field(index) VariantPart.arg(index)
+      )
+
+    | Add padding so that all payloads have the same size.
+    var needed_padding = max_payload_size - layout.size
+    if needed_padding > 0 then parts.&.push(VariantPart.padding(needed_padding))
+
+    | Add tag.
+    parts.&.push(VariantPart.tag(variant_to_tag.get(variant.key)))
+
+    | Map offsets.
+    var offsets = uninitialized_slice[Int](variant.value.len)
+    for entry in layout.field_to_offset do
+      offsets.&.set(entry.key, entry.value)
+
+    | Construct VariantLayout.
+    variant_layouts.&.put(variant.key, VariantLayout {
+      parts = parts.to_slice(), offsets,
+    })
+  }
+
+  EnumLayout {
+    size = max_payload_size + 1,
+    alignment = max_payload_alignment,
+    variants = variant_layouts,
+    tag_offset = max_payload_size,
+    tag_to_variant,
+  }
 }
 
 fun is_recursive(type: PlumType, depth: Int): Bool {
@@ -138,32 +246,4 @@ fun is_recursive(type: PlumType, depth: Int): Bool {
   }
   case lambda(lambda) false
   case recursive(level) level >= depth
-}
-
-| TODO: make efficient by reordering things
-
-struct EfficientLayout {
-  size: Int, alignment: Int,
-  input_to_offset: Slice[Int], | maps each input (by index) to its offset
-  inputs_sorted_by_offset: Slice[Int],
-}
-fun layout_efficiently(inputs: Slice[MemoryLayout]): EfficientLayout {
-  var input_to_offset = list[Int]()
-  var inputs_sorted_by_offset = list[Int]()
-  var offset = 0
-  var alignment = 1
-  for input in inputs.iter().enumerate() do {
-    var layout = input.item
-
-    offset = offset.round_up_to_multiple_of(layout.alignment)
-    input_to_offset.&.push(offset)
-    inputs_sorted_by_offset.&.push(input.index)
-
-    offset = offset + layout.size
-    alignment = max(alignment, layout.alignment)
-  }
-  EfficientLayout {
-    size = offset, alignment, input_to_offset = input_to_offset.to_slice(),
-    inputs_sorted_by_offset = inputs_sorted_by_offset.to_slice(),
-  }
 }

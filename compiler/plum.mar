@@ -18,37 +18,40 @@ import vm.mar
 | - Egg
 | - Yogurt
 | - Waffle
-| - Byte Code in the universe of objects
+| - Byte Code
 
 fun main(): Never {
   eprintln("Welcome to the Plum compiler!")
 
-  | var content = read_file("test.plum") or {
-  |   eprintln("Couldn't read file")
-  |   exit(1)
-  | }
-  | var content = content.to_string()
+  var content = read_file("test.plum") or {
+    eprintln("Couldn't read file")
+    exit(1)
+  }
+  var content = content.to_string()
 
-  | var bacon = content.to_bacon()
-  | | println("Bacon:\n{bacon}\n")
+  var bacon = content.to_bacon()
+  | println("Bacon:\n{bacon}\n")
 
-  | var toast = bacon.to_toast() or(error) {
-  |   stderr."Oh no! An error occurred:\n\n{error}\n"
-  |   exit(1)
-  | }
-  | | println("Toast:\n{toast}\n")
+  var toast = bacon.to_toast() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
+  | println("Toast:\n{toast}\n")
 
-  | var egg = toast.to_egg() or(error) {
-  |   stderr."Oh no! An error occurred:\n\n{error}\n"
-  |   exit(1)
-  | }
-  | println("Egg:\n{egg}\n")
+  var egg = toast.to_egg() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
+  println("Egg:\n{egg}\n")
 
-  | var yogurt = egg.to_yogurt() or(error) {
-  |   stderr."Oh no! An error occurred:\n\n{error}\n"
-  |   exit(1)
-  | }
-  | eprintln("Yogurt:\n{yogurt}\n")
+  var yogurt = egg.to_yogurt() or(error) {
+    stderr."Oh no! An error occurred:\n\n{error}\n"
+    exit(1)
+  }
+  eprintln("Yogurt:\n{yogurt}\n")
+
+  var waffle = yogurt.to_waffle()
+  eprintln("Waffle:\n{waffle}\n")
 
   var waffle = Waffle {
     funs = map(
@@ -79,9 +82,8 @@ fun main(): Never {
       }
     )
   }
-  println(waffle)
 
-  var byte_code = waffle.to_byte_code()
+  | var byte_code = waffle.to_byte_code()
 
 
   | var hello = "Hello, panic!"
@@ -100,11 +102,11 @@ fun main(): Never {
   | var main = yogurt.compile()
   | eprintln("Compiled to byte code: {main}")
 
-  println("Byte Code:")
-  for i in 0..50 do {
-    var address = byte_code + {i * stride_size_of[ByteCodeInstruction]()}
-    stdout."{address} | {address.to_reference[ByteCodeInstruction]().*}\n"
-  }
+  | println("Byte Code:")
+  | for i in 0..50 do {
+  |   var address = byte_code + {i * stride_size_of[ByteCodeInstruction]()}
+  |   stdout."{address} | {address.to_reference[ByteCodeInstruction]().*}\n"
+  | }
 
   | var result = main.call(filled_slice(8, 0.lower_byte()))
   | var result = result.data.to_reference[Int]().*

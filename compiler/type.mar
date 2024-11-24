@@ -28,7 +28,7 @@ enum PlumType {
   struct_: Map[String, PlumType],
   enum_: Map[String, Slice[PlumType]],
   lambda: LambdaType,
-  recursive: Int,
+  recursive: Int, | how many levels above this should we continue?
 }
 struct LambdaType { args: Slice[PlumType], return_type: &PlumType }
 
