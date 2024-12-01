@@ -992,6 +992,26 @@ fun compile_cast_fun_body(
     return param | The cast fun is just the identity fun.
 
   switch to.extend_one_level()
+  case struct_(struct_) {
+    var cast_fields = map[String, YogurtId]()
+    for field in from.extend_one_level().struct_.unwrap() do {
+      var name = field.key
+      var from_field_type = field.value
+      var to_field_type = struct_.get(name)
+
+      var original_id = builder.&.push(YogurtOp.member(YogurtMember {
+        of = param, name
+      }) $ from_field_type)
+      var cast_id = builder.&.push(YogurtOp.call(YogurtCall {
+        function = yogurt.compile_cast_fun(from_field_type, to_field_type),
+        args = list(original_id).to_slice(),
+      }) $ to_field_type)
+
+      cast_fields.&.put(name, cast_id)
+    }
+
+    builder.push(YogurtOp.struct_(cast_fields) $ to)
+  }
   case enum_(to_variants) {
     var cases = map[String, YogurtBody]()
     for entry in from.extend_one_level().enum_.unwrap() do {
