@@ -1,3 +1,29 @@
+| Memory Layouting  
+|
+| At some point, we need to decide how to store structs, enums, etc. in memory.
+| Memory layouting is the process that decides that. It results in memory
+| layouts, which are basically mappings between high-level types and low-level
+| memory.
+|
+| These are our requirements for choosing memory layouts:
+|
+| - Field order shouldn't matter.
+|   You should never have to reorder struct fields to get a more efficient
+|   layout.
+| - The layouting should be fast.
+|   We need to layout a lot of types and want to keep the compiler responsive.
+| - The layouting should be simple.
+|   To interoperate with other languages, the memory layouting algorithm should
+|   be simple and predictable.
+| - Layouts should be efficient.
+|   In particular, sizes of data structures should be small while still
+|   respecting the alignment requirements.
+|
+| The requirements are ordered from most important to least important. In
+| particular, if there's a really slow or complicated algorithm that always
+| chooses optimal memory layouts, we may not use that in favor of a simpler
+| algorithm that reliably chooses reasonably efficient memory layouts.
+
 import plum.mar
 
 struct MemoryLayout { size: Int, alignment: Int }
@@ -9,30 +35,80 @@ struct AggregateLayout {
 }
 enum AggregatePart { padding: Int, field: Int }
 
-| Is deterministic.
-fun layout_aggregate(fields: Slice[MemoryLayout]): AggregateLayout {
-  | TODO: make efficient by reordering fields
+struct FieldMemoryLayout { size: Int, alignment: Int, index: Int }
+fun <=>(a: FieldMemoryLayout, b: FieldMemoryLayout): Ordering {
+  if a.size != b.size then return {a.size <=> b.size}.flip()
+  if a.alignment != b.alignment then return {a.alignment <=> b.alignment}.flip()
+  a.index <=> b.index
+}
 
-  var size = 0
-  var alignment = 1
+fun is_all_minus_one(list: Slice[Int]): Bool {
+  for item in list do if item != -1 then return false
+  true
+}
+fun layout_aggregate(fields: Slice[MemoryLayout]): AggregateLayout {
+  | Sort the fields:
+  | - first by decreasing size
+  | - second by decreasing alignment
+  | - third by increasing index (this makes the sort stable)
+  var mapped_fields = list[FieldMemoryLayout]()
+  for field in fields.iter().enumerate() do
+    mapped_fields.&.push(FieldMemoryLayout {
+      size = field.item.size,
+      alignment = field.item.alignment,
+      index = field.index
+    })
+  var fields = mapped_fields.to_slice()
+  fields.&.sort()
+
+  | Each item in the list represents one byte in the layout. -1 means padding.
+  var bytes = list[Int]()
+  for field in fields do {
+    | See if the field fits in a padding.
+    var offset = 0
+    var placed_field = loop {
+      if offset + field.size > bytes.len then break(false)
+      if bytes.to_slice().subslice(offset ..+ field.size).is_all_minus_one()
+      then {
+        for i in offset ..+ field.size do
+          bytes.&.set(i, field.index)
+        break(true)
+      }
+      offset = offset + field.alignment
+    }
+    if not(placed_field) then {
+      | The field doesn't fit in a padding. Add it to the end.
+      var padding = bytes.len.round_up_to_multiple_of(field.alignment) - bytes.len
+      for i in 0..padding    do bytes.&.push(-1)
+      for i in 0..field.size do bytes.&.push(field.index)
+    }
+  }
+
   var parts = list[AggregatePart]()
   var field_to_offset = map[Int, Int]()
-
-  for field in fields.iter().enumerate() do {
-    var index = field.index
-    var field = field.item
-
-    var size_before_padding = size
-    size = size.round_up_to_multiple_of(field.alignment)
-    if size_before_padding != size then
-      parts.&.push(AggregatePart.padding(size - size_before_padding))
-
-    field_to_offset.&.put(index, size)
-    parts.&.push(AggregatePart.field(index))
-    size = size + field.size
-
-    alignment = max(alignment, field.alignment)
+  var offset = 0
+  loop {
+    if offset >= bytes.len then break
+    var value = bytes.get(offset)
+    var end = offset + 1
+    loop {
+      if end >= bytes.len then break
+      if bytes.get(end) != value then break
+      end = end + 1
+    }
+    if value == -1 then
+      parts.&.push(AggregatePart.padding(end - offset))
+    else {
+      parts.&.push(AggregatePart.field(value))
+      field_to_offset.&.put(value, offset)
+    }
+    offset = end
   }
+
+  var size = bytes.len
+  var alignment = 1
+  for field in fields do alignment = max(alignment, field.alignment)
+
   AggregateLayout {
     size, alignment, parts = parts.to_slice(), field_to_offset = field_to_offset
   }
