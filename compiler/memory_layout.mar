@@ -23,6 +23,18 @@
 | particular, if there's a really slow or complicated algorithm that always
 | chooses optimal memory layouts, we may not use that in favor of a simpler
 | algorithm that reliably chooses reasonably efficient memory layouts.
+|
+| TODO: The memory layouting is definitely not optimal. For example, the struct
+|
+| & a: (Maybe Int) b: Int
+|
+| will be layouted like this:
+|
+| aaaaaaaaapppppppbbbbbbbb
+| 
+| Revisit the memory layouting once we have actual code and can experiment with
+| layouts and see which algorithms are more efficient for real-world types than
+| others.
 
 import plum.mar
 
