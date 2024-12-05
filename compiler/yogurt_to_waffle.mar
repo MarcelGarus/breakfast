@@ -45,7 +45,6 @@ fun to_waffle(
   yogurt_id_to_waffle_expr: &Map[YogurtId, WaffleExpr],
   yogurt: Yogurt,
 ): WaffleExpr {
-  eprintln(expr.op.debug())
   switch expr.op
   case param unreachable()
   case uninitialized unreachable()
@@ -157,7 +156,6 @@ fun to_waffle(
     var arg_layout = arg_types.to_slice().memory_layout_params()
 
     var parts = list[WaffleExpr]()
-    eprintln(arg_layout.debug())
     for part in arg_layout.parts do
       parts.&.push(
         switch part
@@ -301,7 +299,6 @@ fun to_waffle(fun_: YogurtFun, yogurt: Yogurt): WaffleFun {
       )
     )
   }
-  eprintln(yogurt_id_to_waffle_expr.debug())
 
   var body = fun_.body.to_waffle(
     fun_, fun_builder.&, yogurt_id_to_waffle_expr.&, yogurt
@@ -311,12 +308,9 @@ fun to_waffle(fun_: YogurtFun, yogurt: Yogurt): WaffleFun {
 
 fun to_waffle(yogurt: Yogurt): Waffle {
   var funs = map[WaffleSignature, WaffleFun]()
-  for fun_ in yogurt.funs do {
-    eprintln("Waffling {fun_.key}")
+  for fun_ in yogurt.funs do
     funs.&.put(
-      WaffleSignature { string = fun_.key.str },
-      fun_.value.to_waffle(yogurt),
+      WaffleSignature { string = fun_.key.str }, fun_.value.to_waffle(yogurt)
     )
-  }
   Waffle { funs }
 }

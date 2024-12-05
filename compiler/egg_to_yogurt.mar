@@ -186,7 +186,6 @@ fun to_yogurt(
             YogurtOp.comptime(value.comptime_cast(claimed_return_type))
               $ claimed_return_type
           else {
-            println("adding runtime cast at end of function from {actual_return_type} to {claimed_return_type}")
             YogurtOp.call(YogurtCall {
               function = cast_fun, args = list(body.returns).to_slice()
             }) $ claimed_return_type
@@ -358,7 +357,6 @@ fun to_yogurt(
         var case_expr = builder.get(case_.value.returns)
         var case_type = case_expr.type
         if case_type != common_type then {
-          println("We need a cast!")
           var old_body = case_.value
           var new_exprs = list[YogurtId]()
           for expr in old_body.exprs do new_exprs.&.push(expr)
@@ -533,7 +531,6 @@ fun to_yogurt(
       }
     }
     case call(call) {
-      eprintln("Compiling call {call.debug()}")
       var name = call.function
 
       var args = list[YogurtId]()
@@ -654,7 +651,6 @@ fun collect_captured(id: EggId, ignore: &Set[EggId], captured: &List[EggId]) {
 fun collect_captured(
   body: EggBody, ignore: &Set[EggId], captured: &List[EggId], code: EggCode
 ) {
-  eprintln("collecting captured from body")
   for param in body.params do ignore.put(param)
   for id in body.exprs do {
     code.get(id).collect_captured(ignore, captured, code)
@@ -664,8 +660,6 @@ fun collect_captured(
 fun collect_captured(
   expr: EggExpr, ignore: &Set[EggId], captured: &List[EggId], code: EggCode
 ) {
-  eprintln("collecting captured variables from {expr.src}")
-
   switch expr.kind
   case param unreachable()
   case int {}

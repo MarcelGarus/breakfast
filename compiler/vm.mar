@@ -140,7 +140,7 @@ fun call(address: Address, initial_stack: Slice[Byte]): Slice[Byte] {
     current_call += stride_size_of[ByteCodeInstruction]()
 
     | stdout."{vm}\n"
-    println("running {instruction.debug()}")
+    | stdout."running {instruction.debug()}\n"
 
     switch instruction
     case push_padding(amount) {
