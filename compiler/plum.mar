@@ -29,6 +29,8 @@ fun main(): Never {
   eprintln("Welcome to the Plum compiler!")
 
   | var layout = list(
+  |   | MemoryLayout { size = 8, alignment = 8 },
+  |   | MemoryLayout { size = 9, alignment = 8 },
   |   | Test 1:
   |   | MemoryLayout { size = 1, alignment = 1 },
   |   | MemoryLayout { size = 8, alignment = 8 },
@@ -40,9 +42,9 @@ fun main(): Never {
   |   | MemoryLayout { size = 5, alignment = 2 },
   |   | MemoryLayout { size = 4, alignment = 4 },
   |   | Test 4:
-  |   MemoryLayout { size = 3, alignment = 2 },
-  |   MemoryLayout { size = 1, alignment = 1 },
-  |   MemoryLayout { size = 9, alignment = 8 },
+  |   | MemoryLayout { size = 3, alignment = 2 },
+  |   | MemoryLayout { size = 1, alignment = 1 },
+  |   | MemoryLayout { size = 9, alignment = 8 },
   | ).to_slice().layout_aggregate()
 
   | eprintln(layout.debug())
