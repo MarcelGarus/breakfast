@@ -333,6 +333,13 @@ get_maybe list: (List t) index: Int -> (Maybe t) =
         False: rest | get_maybe (index | - 1)
 get list: (List t) index: Int -> t =
   list | get_maybe index | unwrap "out of bounds"
+map list: (List a) mapper: (\ a -> b) -> (List b) =
+  list
+  % Empty: Empty
+    More item rest:
+      More
+        item | mapper
+        rest | map mapper
 
 ####################### Actual program #######################
 
@@ -350,12 +357,23 @@ Point =
   & x: Int
     y: Int
 
+Foo =
+  & a: Maybe Int
+    b: Int
+
+make_foo n: Int -> Foo =
+  & a: Some n
+    b: n
+
 main a: Int -> Int =
   foo =
-    & x: 42
-      y: "hi"
-      z: a
-  foo.x
+    \ b: Int = + a b
+  foo 3
+
+stupidlen list: (List t) -> Int =
+  list
+  % Empty: 42
+    More item rest: rest | stupidlen
 
 make_incremeter a: Int -> (\ Int -> Int) =
   \ b: Int =

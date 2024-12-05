@@ -48,7 +48,8 @@ fun stack_size_diff(instruction: ByteCodeInstruction): Int {
   case pop_below_top(tuple) 0 - tuple.b
   case jump 0
   case jump_table -1
-  case call 0 | Note: You need to udpate this manually
+  case call 0          | Note: You need to udpate this manually.
+  case call_indirect 0 | Note: You need to udpate this manually.
   case ret 0
   case add_8 -8
   case sub_8 -8
@@ -106,7 +107,8 @@ fun to_byte_code(waffle: Waffle): Address {
     fun_.value.compile(builder.&)
   }
   for patch in patches do
-    patch.a.* = ByteCodeInstruction.call(signature_to_address.get(patch.b))
+    patch.a.cast[&ByteCodeInstruction, &Address]().* =
+      signature_to_address.get(patch.b)
 
   signature_to_address.get(WaffleSignature { string = "main Int" })
 }
@@ -198,6 +200,24 @@ fun compile(expr: WaffleExpr, builder: &FunByteCodeBuilder) {
     builder.patches.push(tuple(call_ref, call.function))
     builder.stack_size = builder.stack_size - call.args.size + expr.size
     builder.emit(ByteCodeInstruction.pop_below_top(tuple(expr.size, padding)))
+  }
+  case call_indirect(call) {
+    var padding = builder.align_to(call.args.alignment)
+    call.args.compile(builder)
+    var more_padding = builder.align_to(8)
+    call.function_ptr.compile(builder)
+    builder.emit(ByteCodeInstruction.call_indirect)
+    builder.stack_size = builder.stack_size
+      - 8              | the call_indirect instruction consumes the function ptr
+      - more_padding   | the function consumes the padding
+      - call.args.size | as well as the arguments
+      + expr.size      | and pushes its result
+    builder.emit(ByteCodeInstruction.pop_below_top(tuple(expr.size, padding)))
+  }
+  case function_ptr(signature) {
+    var ref = builder.instructions.ref_of_next()
+    builder.emit(ByteCodeInstruction.push_8(0))
+    builder.patches.&.push(tuple(ref, signature))
   }
   case add(args) { args.compile(builder) builder.emit(ByteCodeInstruction.add_8) }
   case sub(args) { args.compile(builder) builder.emit(ByteCodeInstruction.sub_8) }

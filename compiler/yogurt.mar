@@ -7,7 +7,7 @@ struct YogurtSignature { str: String }
 enum YogurtParam { runtime: PlumType, comptime: YogurtValue }
 
 struct YogurtFun {
-  exprs: Slice[YogurtExpr], captured: Maybe[Slice[YogurtId]], body: YogurtBody
+  exprs: Slice[YogurtExpr], captures: Maybe[Slice[YogurtId]], body: YogurtBody
 }
 struct YogurtId { int: Int }
 struct YogurtBody {
@@ -74,6 +74,11 @@ fun write[W](writer: W, yogurt: Yogurt) {
   for fun_ in yogurt.funs do {
     if first then first = false else writer."\n"
     writer."{fun_.key}:"
+    if fun_.value.captures is some(captures) then {
+      writer." (captures "
+      for capture in captures do writer." {capture}"
+      writer.")"
+    }
     writer.write(fun_.value.body, fun_.value, 1)
   }
 }

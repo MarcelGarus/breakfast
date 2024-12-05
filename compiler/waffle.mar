@@ -8,6 +8,7 @@
 | Structs have been converted into runs of expressions (shown using curly
 | braces). Enums have been converted into tagged unions.
 |
+| TODO: update
 | main Int: @0:word
 |   | Creating and accessing a struct.
 |   | foo = & x: @0 y: 42   | & y: Int x: Int
@@ -45,6 +46,8 @@ enum WaffleExprKind {
   member: WaffleMember,
   switch_: WaffleSwitch,
   call: WaffleCall,
+  call_indirect: WaffleCallIndirect,
+  function_ptr: WaffleSignature,
   add: &WaffleExpr,
   sub: &WaffleExpr,
   mul: &WaffleExpr,
@@ -60,6 +63,7 @@ enum WaffleExprKind {
 struct WaffleMember { of: &WaffleExpr, offset: Int }
 struct WaffleSwitch { byte: &WaffleExpr, cases: Slice[WaffleBody] }
 struct WaffleCall { function: WaffleSignature, args: &WaffleExpr }
+struct WaffleCallIndirect { function_ptr: &WaffleExpr, args: &WaffleExpr }
 
 fun waffle_padding(amount: Int): WaffleExpr {
   WaffleExpr {
@@ -118,6 +122,22 @@ fun waffle_call(
   WaffleExpr {
     size, alignment,
     kind = WaffleExprKind.call(WaffleCall { function, args = args.put_on_heap() })
+  }
+}
+| The size and alignment are of the returned value, not the arguments.
+fun waffle_call_indirect(
+  function_ptr: WaffleExpr, args: WaffleExpr, size: Int, alignment: Int
+): WaffleExpr {
+  WaffleExpr {
+    size, alignment,
+    kind = WaffleExprKind.call_indirect(WaffleCallIndirect {
+      function_ptr = function_ptr.put_on_heap(), args = args.put_on_heap()
+    })
+  }
+}
+fun waffle_function_ptr(signature: WaffleSignature): WaffleExpr {
+  WaffleExpr {
+    size = 8, alignment = 8, kind = WaffleExprKind.function_ptr(signature)
   }
 }
 fun is_word(expr: WaffleExpr): Bool {
@@ -313,6 +333,14 @@ fun write[W](
     writer.write(call.args.*, fun_, indentation)
     writer.")"
   }
+  case call_indirect(call) {
+    writer."(*("
+    writer.write(call.function_ptr.*, fun_, indentation)
+    writer.") "
+    writer.write(call.args.*, fun_, indentation)
+    writer.")"
+  }
+  case function_ptr(signature) writer."&({signature})"
   case add(ops) {
     writer."(add "
     writer.write(ops.*, fun_, indentation)

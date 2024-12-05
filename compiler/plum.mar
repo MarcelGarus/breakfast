@@ -28,6 +28,27 @@ import vm.mar
 fun main(): Never {
   eprintln("Welcome to the Plum compiler!")
 
+  | var layout = list(
+  |   | Test 1:
+  |   | MemoryLayout { size = 1, alignment = 1 },
+  |   | MemoryLayout { size = 8, alignment = 8 },
+  |   | Test 2:
+  |   | MemoryLayout { size = 3, alignment = 2 },
+  |   | MemoryLayout { size = 2, alignment = 2 },
+  |   | MemoryLayout { size = 3, alignment = 1 },
+  |   | Test 3:
+  |   | MemoryLayout { size = 5, alignment = 2 },
+  |   | MemoryLayout { size = 4, alignment = 4 },
+  |   | Test 4:
+  |   MemoryLayout { size = 3, alignment = 2 },
+  |   MemoryLayout { size = 1, alignment = 1 },
+  |   MemoryLayout { size = 9, alignment = 8 },
+  | ).to_slice().layout_aggregate()
+
+  | eprintln(layout.debug())
+
+  | exit(0)
+
   var content = read_file("test.plum") or {
     eprintln("Couldn't read file")
     exit(1)

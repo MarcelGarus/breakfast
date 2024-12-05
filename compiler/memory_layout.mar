@@ -31,7 +31,7 @@
 | will be layouted like this:
 |
 | aaaaaaaaapppppppbbbbbbbb
-| 
+|
 | Revisit the memory layouting once we have actual code and can experiment with
 | layouts and see which algorithms are more efficient for real-world types than
 | others.
@@ -144,7 +144,7 @@ fun memory_layout(type: PlumType): MemoryLayout {
     var layout = type.memory_layout_enum()
     MemoryLayout { size = layout.size, alignment = layout.alignment }
   }
-  case lambda(lambda) todo()
+  case lambda MemoryLayout { size = 16, alignment = 8 }
   case recursive unreachable()
 }
 
@@ -175,6 +175,35 @@ fun memory_layout_params(params: Slice[PlumType]): ParamsLayout {
     size = layout.size, alignment = layout.alignment,
     parts = parts.to_slice(),
     param_to_offset = layout.field_to_offset,
+  }
+}
+
+| Layouting closures  
+
+struct ClosureLayout {
+  size: Int, alignment: Int,
+  parts: Slice[ClosurePart],
+  capture_to_offset: Map[Int, Int],
+}
+enum ClosurePart { capture: Int, padding: Int }
+
+fun memory_layout_closure(captures: Slice[PlumType]): ClosureLayout {
+  var layouts = list[MemoryLayout]()
+  for capture in captures do layouts.&.push(capture.memory_layout())
+  var layout = layouts.to_slice().layout_aggregate()
+
+  var parts = list[ClosurePart]()
+  for part in layout.parts do
+    parts.&.push(
+      switch part
+      case padding(amount) ClosurePart.padding(amount)
+      case field(index) ClosurePart.capture(index)
+    )
+
+  ClosureLayout {
+    size = layout.size, alignment = layout.alignment,
+    parts = parts.to_slice(),
+    capture_to_offset = layout.field_to_offset,
   }
 }
 
