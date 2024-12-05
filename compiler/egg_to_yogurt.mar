@@ -410,11 +410,13 @@ fun to_yogurt(
           egg_to_yogurt = map[EggId, YogurtId]()
         }
 
+        var inner_captures = list[YogurtId]() | captured values from the pov of the lambda
         for ids in zip(captured_egg_ids.iter(), captures.iter()) do {
-          var value = lambda_builder.&.push(
+          var yogurt_id = lambda_builder.&.push(
             YogurtOp.param $ builder.get(ids.b).type
           )
-          lambda_compiler.&.add_mapping(ids.a, value)
+          inner_captures.&.push(yogurt_id)
+          lambda_compiler.&.add_mapping(ids.a, yogurt_id)
         }
         var params = list[YogurtId]()
         for i in 0..lambda.params.len do {
@@ -440,7 +442,7 @@ fun to_yogurt(
         var function = yogurt_signature("lambda-{expr.src}", empty_slice[YogurtParam]())
         compiler.yogurt.funs.&.put(function, YogurtFun {
           exprs = lambda_builder.exprs.to_slice(),
-          captures = some(captures),
+          captures = some(inner_captures.to_slice()),
           body = lambda_body,
         })
         function

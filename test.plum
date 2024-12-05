@@ -340,6 +340,10 @@ map list: (List a) mapper: (\ a -> b) -> (List b) =
       More
         item | mapper
         rest | map mapper
+sum list: (List Int) -> Int =
+  list
+  % Empty: 0
+    More item rest: + item (rest | sum)
 
 ####################### Actual program #######################
 
@@ -366,9 +370,11 @@ make_foo n: Int -> Foo =
     b: n
 
 main a: Int -> Int =
-  foo =
-    \ b: Int = + a b
-  foo 3
+  b = 1
+  list 1 2 3
+  | map
+      \ item: Int = + item b
+  | sum
 
 stupidlen list: (List t) -> Int =
   list
