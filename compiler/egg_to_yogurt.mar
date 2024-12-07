@@ -41,12 +41,12 @@ fun ==(a: YogurtStackEntry, b: YogurtStackEntry): Bool {
 }
 
 fun start_running(compiler: &YogurtCompiler, signature: YogurtSignature) {
-  for i in 0..compiler.stack.len do stderr."  "
-  stderr."{signature}\n"
   compiler.stack.&.push(YogurtStackEntry.running(signature))
+  compiler.print_status()
 }
 fun done_running(compiler: &YogurtCompiler) {
-  ignore(compiler.stack.&.pop().running or panic("wasn't running something"))
+  compiler.stack.&.pop().running or panic("wasn't running something")
+  compiler.print_status()
 }
 fun is_currently_running(
   compiler: YogurtCompiler, signature: YogurtSignature
@@ -55,12 +55,12 @@ fun is_currently_running(
 }
 
 fun start_compiling(compiler: &YogurtCompiler, signature: YogurtSignature) {
-  for i in 0..compiler.stack.len do stderr."  "
-  stderr."{signature}\n"
   compiler.stack.&.push(YogurtStackEntry.compiling(signature))
+  compiler.print_status()
 }
 fun done_compiling(compiler: &YogurtCompiler) {
-  ignore(compiler.stack.&.pop().compiling or panic("wasn't running something"))
+  compiler.stack.&.pop().compiling or panic("wasn't running something")
+  compiler.print_status()
 }
 fun is_currently_compiling(
   compiler: YogurtCompiler, signature: YogurtSignature
@@ -78,6 +78,53 @@ fun is_defined(compiler: YogurtCompiler, signature: YogurtSignature): Bool {
 }
 fun get(compiler: YogurtCompiler, signature: YogurtSignature): YogurtFun {
   compiler.yogurt.funs.get(signature)
+}
+
+fun write_ansi_escape_sequence[W](writer: W, sequence: String) {
+  writer.write(27.lower_byte().to_char())
+  writer.write(sequence)
+}
+fun move_cursor_to_front[W](writer: W) { writer.write_ansi_escape_sequence("[G") }
+fun erase_rest_of_current_line[W](writer: W) { writer.write_ansi_escape_sequence("[K") }
+fun move_cursor_to_next[W](writer: W, n: Int) {
+  if n > 0 then writer.write_ansi_escape_sequence("[{n}E")
+}
+fun move_cursor_to_previous[W](writer: W, n: Int) {
+  if n > 0 then writer.write_ansi_escape_sequence("[{n}F")
+}
+var max_preprinted_lines = 0
+
+fun print_status(compiler: &YogurtCompiler) {
+  for i in 0..max_preprinted_lines do {
+    stderr.move_cursor_to_front()
+    stderr.erase_rest_of_current_line()
+    stderr.move_cursor_to_next(1)
+  }
+  stderr.move_cursor_to_previous(max_preprinted_lines)
+
+  var num_printed = 0
+  for entry in compiler.stack do {
+    if num_printed == 5 then break {}
+
+    var comptime_and_signature =
+      switch entry
+      case compiling(signature) tuple(false, signature)
+      case running(signature) tuple(true, signature)
+    var comptime = comptime_and_signature.a
+    var signature = comptime_and_signature.b
+
+    if comptime then stderr.write_ansi_escape_sequence("[32m")
+    if signature.str.len > 60 then
+      stderr."{signature.str.substr(0..57)}..."
+    else
+      stderr."{signature}"
+    if comptime then stderr.write_ansi_escape_sequence("[0m")
+    stderr."\n"
+
+    num_printed = num_printed + 1
+  }
+  stderr.move_cursor_to_previous(num_printed)
+  max_preprinted_lines = num_printed
 }
 
 struct YogurtCodeCompiler {
