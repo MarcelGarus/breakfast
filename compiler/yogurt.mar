@@ -4,7 +4,6 @@ import plum.mar
 
 struct Yogurt { funs: Map[YogurtSignature, YogurtFun] }
 struct YogurtSignature { str: String }
-enum YogurtParam { runtime: PlumType, comptime: YogurtValue }
 
 struct YogurtFun {
   exprs: Slice[YogurtExpr], captures: Maybe[Slice[YogurtId]], body: YogurtBody
@@ -50,18 +49,77 @@ struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
 struct YogurtCall { function: YogurtSignature, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
+fun $(kind: YogurtValueKind, type: PlumType): _ { YogurtValue { kind, type } }
+
+fun $(op: YogurtOp, type: PlumType): _ { YogurtExpr { op, type } }
+fun to_expr(value: YogurtValue): _ { YogurtOp.comptime(value) $ value.type }
+
+fun yogurt_value_int(int: Int): _ { YogurtValueKind.int(int) $ type_int }
+fun yogurt_value_string(string: String): YogurtValue {
+  YogurtValueKind.string(string) $ type_string
+}
+fun yogurt_value_struct(fields: Map[String, YogurtValue]): YogurtValue {
+  var field_types = map[String, PlumType]()
+  for field in fields do field_types.&.put(field.key, field.value.type)
+  YogurtValueKind.struct_(fields) $ PlumType.struct_(field_types)
+}
+fun yogurt_value_struct(
+  type: PlumType, fields: Map[String, YogurtValue]
+): YogurtValue {
+  for field in fields do
+    field.value.type == type.struct_.unwrap().get(field.key)
+      or panic("field has wrong type")
+  YogurtValueKind.struct_(fields) $ type
+}
+fun yogurt_value_type(type: PlumType): YogurtValue {
+  YogurtValueKind.type(type) $ type_type
+}
+fun yogurt_value_symbol(symbol: String): YogurtValue {
+  YogurtValueKind.variant(YogurtVariantValue {
+    symbol, payloads = empty_slice[YogurtValue]()
+  }) $ PlumType.enum_(map(symbol -> empty_slice[PlumType]()))
+}
+fun yogurt_value_variant(symbol: String, payloads: Slice[YogurtValue]): YogurtValue {
+  var payload_types = list[PlumType]()
+  for payload in payloads do payload_types.&.push(payload.type)
+  YogurtValueKind.variant(YogurtVariantValue { symbol, payloads })
+    $ PlumType.enum_(map(symbol -> payload_types.to_slice()))
+}
+fun yogurt_value_list(items: Slice[YogurtValue], item_type: PlumType): YogurtValue {
+  println("building comptime list of items: {items}")
+  YogurtValueKind.variant(
+    if items.get_maybe(0) is some(item) then
+      YogurtVariantValue {
+        symbol = "More",
+        payloads = list(
+          item,
+          yogurt_value_list(items.subslice(1..items.len), item_type)
+        ).to_slice()
+      }
+    else
+      YogurtVariantValue { symbol = "Empty", payloads = empty_slice[YogurtValue]() }
+  ) $ type_list(item_type)
+}
+
+var yogurt_fun_placeholder = YogurtFun {
+  exprs = empty_slice[YogurtExpr](),
+  captures = none[Slice[YogurtId]](),
+  body = YogurtBody {
+    params = empty_slice[YogurtId](),
+    exprs = empty_slice[YogurtId](),
+    returns = YogurtId { int = -1 },
+  }
+}
+
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
 fun ==(a: YogurtId, b: YogurtId): Bool { a.int == b.int }
 fun hash(hasher: &Hasher, id: YogurtId) { hasher.hash(id.int) }
 
-fun yogurt_signature(
-  name: String, params: Slice[YogurtParam]
-): YogurtSignature {
+fun yogurt_signature(name: String, params: Slice[PlumType]): YogurtSignature {
   var b = string_builder().&
   b."{name}"
-  for param in params do
-    b." {switch param case comptime(val) "{val}:{val.type}" case runtime(type) "{type}"}"
+  for param in params do b." {param}"
   YogurtSignature { str = b.to_string() }
 }
 fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
@@ -97,14 +155,7 @@ fun write[W](writer: W, body: YogurtBody, fun_: YogurtFun, indentation: Int) {
   for i in 0..indentation do writer."  "
   writer."{body.returns}"
 }
-fun write[W](writer: W, param: YogurtParam) {
-  switch param
-  case runtime(type) writer."{type}"
-  case comptime(value) writer."{value}: {value.type}"
-}
-fun write[W](
-  writer: W, op: YogurtOp, fun_: YogurtFun, indentation: Int
-) {
+fun write[W](writer: W, op: YogurtOp, fun_: YogurtFun, indentation: Int) {
   switch op
   case uninitialized writer."uninitialized"
   case comptime(value) writer."comptime {value}"
