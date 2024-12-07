@@ -49,6 +49,8 @@ struct YogurtLambdaCall { lambda: YogurtId, args: Slice[YogurtId] }
 struct YogurtCall { function: YogurtSignature, args: Slice[YogurtId] }
 struct YogurtInstruction { instruction: Instruction, args: Slice[YogurtId] }
 
+fun yogurt(): _ { Yogurt { funs = map[YogurtSignature, YogurtFun]() } }
+
 fun $(kind: YogurtValueKind, type: PlumType): _ { YogurtValue { kind, type } }
 
 fun $(op: YogurtOp, type: PlumType): _ { YogurtExpr { op, type } }

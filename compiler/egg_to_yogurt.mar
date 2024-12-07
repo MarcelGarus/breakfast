@@ -5,43 +5,139 @@ import plum.mar
 fun to_yogurt(egg: Egg): Result[Yogurt, Error] {
   var main = egg.lookup("main", list(type_int).to_slice()) or
     return error[Yogurt, Error](error("No main function.", invalid_src()))
-  var yogurt = Yogurt { funs = map[YogurtSignature, YogurtFun]() }
-  main.fun_.compile(main.substitutions, "main", Context {
-    stack = list[String](), egg, yogurt = yogurt.&
-  }.&)?
+  var yogurt = yogurt()
+  main.compile(yogurt_compiler(egg, yogurt.&).&)?
   ok[Yogurt, Error](yogurt)
 }
 
-struct Context {
-  stack: List[String],
+| Compilers  
+|
+| When compiling to Yogurt, we execute some functions at comptime and we
+| specialize generic functions for concrete types (aka monomorphization). When
+| doing that, we need to be careful about recursive functions:
+|
+| - For comptime execution, recursive calls result in a compiler error.
+| - For normal compilation, recursive calls are fine. Still, we need to detect
+|   recursive calls so that the compiler itself doesn't get stuck in infinite
+|   recursion.
+
+struct YogurtCompiler {
+  | The stack is the stack of the compiler itself, containing the signatures of
+  | comptime calls and monomorphized functions.
+  stack: List[YogurtStackEntry],
   egg: Egg,
   yogurt: &Yogurt,
 }
+enum YogurtStackEntry { compiling: YogurtSignature, running: YogurtSignature }
 
-fun push_to_stack(context: &Context, string: String) {
-  for i in 0..context.stack.len do stderr."  "
-  stderr."{string}\n"
-  context.stack.&.push(string)
+fun yogurt_compiler(egg: Egg, yogurt: &Yogurt): YogurtCompiler {
+  YogurtCompiler { stack = list[YogurtStackEntry](), egg, yogurt }
 }
-fun pop_from_stack(context: &Context) { context.stack.&.pop().ignore() }
-fun is_on_stack(context: Context, string: String): Bool {
-  context.stack.iter().&.contains(string)
+
+fun ==(a: YogurtStackEntry, b: YogurtStackEntry): Bool {
+  switch a
+  case compiling(a) if b is compiling(b) then a == b else false
+  case running(a)   if b is running(b)   then a == b else false
+}
+
+fun start_running(compiler: &YogurtCompiler, signature: YogurtSignature) {
+  for i in 0..compiler.stack.len do stderr."  "
+  stderr."{signature}\n"
+  compiler.stack.&.push(YogurtStackEntry.running(signature))
+}
+fun done_running(compiler: &YogurtCompiler) {
+  ignore(compiler.stack.&.pop().running or panic("wasn't running something"))
+}
+fun is_currently_running(
+  compiler: YogurtCompiler, signature: YogurtSignature
+): Bool {
+  compiler.stack.iter().&.contains(YogurtStackEntry.running(signature))
+}
+
+fun start_compiling(compiler: &YogurtCompiler, signature: YogurtSignature) {
+  for i in 0..compiler.stack.len do stderr."  "
+  stderr."{signature}\n"
+  compiler.stack.&.push(YogurtStackEntry.compiling(signature))
+}
+fun done_compiling(compiler: &YogurtCompiler) {
+  ignore(compiler.stack.&.pop().compiling or panic("wasn't running something"))
+}
+fun is_currently_compiling(
+  compiler: YogurtCompiler, signature: YogurtSignature
+): Bool {
+  compiler.stack.iter().&.contains(YogurtStackEntry.compiling(signature))
+}
+
+fun define(
+  compiler: &YogurtCompiler, signature: YogurtSignature, fun_: YogurtFun
+) {
+  compiler.yogurt.funs.&.put(signature, fun_)
+}
+fun is_defined(compiler: YogurtCompiler, signature: YogurtSignature): Bool {
+  compiler.yogurt.funs.contains(signature)
+}
+fun get(compiler: YogurtCompiler, signature: YogurtSignature): YogurtFun {
+  compiler.yogurt.funs.get(signature)
+}
+
+struct YogurtCodeCompiler {
+  parent: &YogurtCompiler,
+  code: EggCode,
+  egg_to_yogurt: Map[EggId, YogurtId],
+}
+
+fun code_compiler(compiler: &YogurtCompiler, code: EggCode): YogurtCodeCompiler {
+  YogurtCodeCompiler {
+    parent = compiler, code, egg_to_yogurt = map[EggId, YogurtId]()
+  }
+}
+fun add_mapping(
+  compiler: &YogurtCodeCompiler, egg_id: EggId, yogurt_id: YogurtId
+) {
+  compiler.egg_to_yogurt.&.put(egg_id, yogurt_id)
+}
+fun lookup(compiler: YogurtCodeCompiler, egg_id: EggId): YogurtId {
+  compiler.egg_to_yogurt.get(egg_id)
+}
+
+struct YogurtFunBuilder { exprs: List[YogurtExpr] }
+
+fun yogurt_fun_builder(): _ { YogurtFunBuilder { exprs = list[YogurtExpr]() } }
+fun push(builder: &YogurtFunBuilder, expr: YogurtExpr): YogurtId {
+  var id = YogurtId { int = builder.exprs.len }
+  builder.exprs.&.push(expr)
+  id
+}
+fun get(builder: YogurtFunBuilder, id: YogurtId): YogurtExpr {
+  builder.exprs.get(id.int)
 }
 
 | Looking up functions in the Egg  
 | Whenever a function is called, we need to choose the correct function based on
 | the name and argument types.
 
-struct EggLookupResult { fun_: EggFun, substitutions: Substitutions }
+struct MatchingFun { fun_: EggFun, substitutions: Substitutions }
+
+fun name(match: MatchingFun): String { match.fun_.name.string }
+fun param_types(match: MatchingFun): Slice[PlumType] {
+  var types = list[PlumType]()
+  for param in match.fun_.params do
+    types.&.push(param.type.specialize(match.substitutions))
+  types.to_slice()
+}
+fun return_type(match: MatchingFun): PlumType {
+  match.fun_.return_type.specialize(match.substitutions)
+}
+
 fun lookup(
   egg: Egg, name: String, args: Slice[PlumType],
-): Result[EggLookupResult, String] {
+): Result[MatchingFun, String] {
   var name_matches = list[EggFun]()
   for fun_ in egg.funs do
     if fun_.name.string == name then
       name_matches.&.push(fun_)
   if name_matches.is_empty() then
-    return error[EggLookupResult, String]("There is no function named {name.debug()}.")
+    return error[MatchingFun, String]("There is no function named {name.debug()}.")
 
   var full_matches = list[Tuple2[EggFun, Substitutions]]()
   for fun_ in name_matches do {
@@ -56,10 +152,10 @@ fun lookup(
   }
 
   if full_matches.is_empty() then
-    return error[EggLookupResult, String](
+    return error[MatchingFun, String](
       "There is no matching function named {name} for the args {args}.")
   if full_matches.len > 1 then
-    return error[EggLookupResult, String]({
+    return error[MatchingFun, String]({
       var b = string_builder().&
       b."multiple functions match {name} {args}:"
       for match in full_matches do
@@ -68,7 +164,7 @@ fun lookup(
     })
   var fun_and_substitutions = full_matches.get(0)
 
-  ok[EggLookupResult, String](EggLookupResult {
+  ok[MatchingFun, String](MatchingFun {
     fun_          = fun_and_substitutions.a,
     substitutions = fun_and_substitutions.b,
   })
@@ -85,21 +181,19 @@ enum ComptimeResult {
 }
 
 fun run(
-  egg_fun: EggFun, args: Slice[YogurtValue], substitutions: Substitutions,
-  name: String, context: &Context
+  match: MatchingFun, args: Slice[YogurtValue], compiler: &YogurtCompiler
 ): ComptimeResult {
-  var signature = yogurt_signature(name, args)
+  var signature = yogurt_signature(match.name(), args)
 
-  if context.is_on_stack(signature.str) then panic("infinite comptime recursion")
-  context.push_to_stack(signature.str)
+  if compiler.is_currently_running(signature) then
+    panic("infinite comptime recursion") | TODO: report the error
+  compiler.start_running(signature)
 
   var result =
-    switch egg_fun.impl
+    switch match.fun_.impl
     case code(code) {
       var builder = yogurt_fun_builder()
-      var compiler = YogurtCodeCompiler {
-        context, code, egg_to_yogurt = map[EggId, YogurtId]()
-      }
+      var compiler = compiler.code_compiler(code)
 
       var params = list[YogurtId]()
       for both in zip(code.body.params.iter(), args.iter()) do {
@@ -123,13 +217,12 @@ fun run(
             '{builder.get(body.returns).op.debug()}")
 
       | Check that the return type matches what the function claims it is.
-      var claimed_return_type = egg_fun.return_type.specialize(substitutions)
-      var actual_return_type = value.type
-      actual_return_type.is_assignable_to(claimed_return_type) or
+      var claimed_return_type = match.return_type()
+      value.type.is_assignable_to(claimed_return_type) or
         return ComptimeResult.comptime_error(
           "Return types don't match:\n
           'claimed type: {claimed_return_type}\n
-          ' actual type: {actual_return_type}"
+          ' actual type: {value.type}"
         )
       var value = value.comptime_cast(claimed_return_type)
 
@@ -137,7 +230,7 @@ fun run(
     }
     case builtin(builtin) builtin.run(args)
 
-  context.pop_from_stack()
+  compiler.done_running()
   result
 }
 fun run(builtin: Builtin, args: Slice[YogurtValue]): ComptimeResult {
@@ -161,13 +254,15 @@ fun run(builtin: Builtin, args: Slice[YogurtValue]): ComptimeResult {
     case div_ints {
       var a = args.get(0).kind.int.unwrap()
       var b = args.get(1).kind.int.unwrap()
-      if b == 0 then return ComptimeResult.runtime_crash(tuple("Divide by zero.", type_int))
+      if b == 0 then
+        return ComptimeResult.runtime_crash(tuple("Divide by zero.", type_int))
       yogurt_value_int(a / b)
     }
     case mod_ints {
       var a = args.get(0).kind.int.unwrap()
       var b = args.get(1).kind.int.unwrap()
-      if b == 0 then return ComptimeResult.runtime_crash(tuple("Mod by zero.", type_int))
+      if b == 0 then
+        return ComptimeResult.runtime_crash(tuple("Mod by zero.", type_int))
       yogurt_value_int(a % b)
     }
     case and_ints {
@@ -248,21 +343,21 @@ fun run(builtin: Builtin, args: Slice[YogurtValue]): ComptimeResult {
   ComptimeResult.returns(value)
 }
 
-fun comptime_cast(value: YogurtValue, type: PlumType): YogurtValue {
+fun comptime_cast(value: YogurtValue, target: PlumType): YogurtValue {
   switch value.kind
   case int value
   case string value
   case struct_(struct_) {
     YogurtValueKind.struct_({
       var fields = map[String, YogurtValue]()
-      var field_types = type.extend_one_level().struct_.unwrap()
+      var field_types = target.extend_one_level().struct_.unwrap()
       for field in struct_ do
         fields.&.put(
           field.key,
           field.value.comptime_cast(field_types.get(field.key))
         )
       fields
-    }) $ type
+    }) $ target
   }
   case variant(variant) {
     YogurtValueKind.variant(YogurtVariantValue {
@@ -270,14 +365,14 @@ fun comptime_cast(value: YogurtValue, type: PlumType): YogurtValue {
       payloads = {
         var payloads = list[YogurtValue]()
         var payload_types =
-          type.extend_one_level().enum_.unwrap().get(variant.symbol)
+          target.extend_one_level().enum_.unwrap().get(variant.symbol)
         for both in zip(variant.payloads.iter(), payload_types.iter()) do
           payloads.&.push(both.a.comptime_cast(both.b))
         payloads.to_slice()
       }
-    }) $ type
+    }) $ target
   }
-  case lambda todo()
+  case lambda todo("comptime cast lambdas")
   case type value
 }
 
@@ -285,56 +380,22 @@ fun comptime_cast(value: YogurtValue, type: PlumType): YogurtValue {
 | If not all arguments to a function are known at compile-time, the function is
 | compiled into some code that will run later (at runtime).
 
-struct YogurtFunBuilder { exprs: List[YogurtExpr] }
-
-fun yogurt_fun_builder(): _ { YogurtFunBuilder { exprs = list[YogurtExpr]() } }
-fun push(builder: &YogurtFunBuilder, expr: YogurtExpr): YogurtId {
-  var id = YogurtId { int = builder.exprs.len }
-  builder.exprs.&.push(expr)
-  id
-}
-fun get(builder: YogurtFunBuilder, id: YogurtId): YogurtExpr {
-  builder.exprs.get(id.int)
-}
-
-struct YogurtCodeCompiler {
-  context: &Context,
-  code: EggCode,
-  egg_to_yogurt: Map[EggId, YogurtId],
-}
-
-fun add_mapping(
-  compiler: &YogurtCodeCompiler, egg_id: EggId, yogurt_id: YogurtId
-) {
-  compiler.egg_to_yogurt.&.put(egg_id, yogurt_id)
-}
-fun lookup(compiler: YogurtCodeCompiler, egg_id: EggId): YogurtId {
-  compiler.egg_to_yogurt.get(egg_id)
-}
-
 fun compile(
-  egg_fun: EggFun, substitutions: Substitutions, name: String, context: &Context
+  match: MatchingFun, compiler: &YogurtCompiler
 ): Result[YogurtSignature, Error] {
-  var param_types = list[PlumType]()
-  for param in egg_fun.params do
-    param_types.&.push(param.type.specialize(substitutions))
-  var param_types = param_types.to_slice()
+  var param_types = match.param_types()
+  var signature = yogurt_signature(match.name(), param_types)
 
-  var signature = yogurt_signature(name, param_types)
-
-  if context.yogurt.funs.contains(signature)
-    or context.is_on_stack(signature.str)
+  if compiler.is_defined(signature) or compiler.is_currently_compiling(signature)
   then
     return ok[YogurtSignature, Error](signature)
-  context.push_to_stack(signature.str)
+  compiler.start_compiling(signature)
 
   var fun_ =
-    switch egg_fun.impl
+    switch match.fun_.impl
     case code(code) {
       var builder = yogurt_fun_builder()
-      var compiler = YogurtCodeCompiler {
-        context, code, egg_to_yogurt = map[EggId, YogurtId]()
-      }
+      var compiler = compiler.code_compiler(code)
 
       var params = list[YogurtId]()
       for both in zip(code.body.params.iter(), param_types.iter()) do {
@@ -348,7 +409,7 @@ fun compile(
       var body = code.body.compile(params, builder.&, compiler.&)?
 
       | Check that the return type matches what the function claims it is.
-      var claimed_return_type = egg_fun.return_type.specialize(substitutions)
+      var claimed_return_type = match.return_type()
       var actual_return_type = builder.get(body.returns).type
       if claimed_return_type != actual_return_type then {
         actual_return_type.is_assignable_to(claimed_return_type) or
@@ -356,13 +417,13 @@ fun compile(
             "Return types don't match:\n
             'claimed type: {claimed_return_type}\n
             ' actual type: {actual_return_type}",
-            egg_fun.name.src
+            match.fun_.name.src
           ))
 
         var body_with_cast = list[YogurtId]()
         for id in body.exprs do body_with_cast.&.push(id)
         var cast_fun =
-          compile_cast_fun(actual_return_type, claimed_return_type, compiler.context)
+          compile_cast_fun(actual_return_type, claimed_return_type, compiler.parent)
         var cast = builder.&.push(
           if builder.get(body.returns).op is comptime(value) then
             value.comptime_cast(claimed_return_type).to_expr()
@@ -386,10 +447,10 @@ fun compile(
         body,
       }
     }
-    case builtin(builtin) builtin.compile(param_types, context)?
+    case builtin(builtin) builtin.compile(param_types, compiler)?
 
-  context.yogurt.funs.&.put(signature, fun_)
-  context.pop_from_stack()
+  compiler.define(signature, fun_)
+  compiler.done_compiling()
   ok[YogurtSignature, Error](signature)
 }
 
@@ -434,17 +495,18 @@ fun compile(
       for field in fields do
         if not(builder.get(field.value).op is comptime) then is_comptime = false
 
-      builder.push({
-        if is_comptime
-        then YogurtOp.comptime(YogurtValueKind.struct_({
-          var comptime_fields = map[String, YogurtValue]()
-          for field in fields do
-            comptime_fields.&.put(
-              field.key, builder.get(field.value).op.comptime.unwrap())
-          comptime_fields
-        }) $ type)
-        else YogurtOp.struct_(fields)
-      } $ type)
+      builder.push(
+        if is_comptime then
+          yogurt_value_struct({
+            var field_values = map[String, YogurtValue]()
+            for field in fields do
+              field_values.&.put(
+                field.key, builder.get(field.value).op.comptime.unwrap())
+            field_values
+          }).comptime_cast(type).to_expr()
+        else
+          YogurtOp.struct_(fields) $ type
+      )
     }
     case member(member) {
       var of = compiler.lookup(member.of)
@@ -566,7 +628,7 @@ fun compile(
               if case_expr.op is comptime(value)
               then YogurtOp.comptime(value.comptime_cast(common_type))
               else YogurtOp.call(YogurtCall {
-                function = compile_cast_fun(case_type, common_type, compiler.context),
+                function = compile_cast_fun(case_type, common_type, compiler.parent),
                 args = list(old_body.returns).to_slice()
               })
             } $ common_type)
@@ -606,10 +668,7 @@ fun compile(
       | closure as an explicit first argument.
       var function = {
         var lambda_builder = yogurt_fun_builder()
-        var lambda_compiler = YogurtCodeCompiler {
-          context = compiler.context, code = compiler.code,
-          egg_to_yogurt = map[EggId, YogurtId]()
-        }
+        var lambda_compiler = compiler.parent.code_compiler(compiler.code)
 
         var inner_captures = list[YogurtId]() | captured values from the pov of the lambda
         for ids in zip(captured_egg_ids.iter(), captures.iter()) do {
@@ -641,7 +700,7 @@ fun compile(
         }
 
         var function = yogurt_signature("lambda-{expr.src}", empty_slice[PlumType]())
-        compiler.context.yogurt.funs.&.put(function, YogurtFun {
+        compiler.parent.define(function, YogurtFun {
           exprs = lambda_builder.exprs.to_slice(),
           captures = some(inner_captures.to_slice()),
           body = lambda_body,
@@ -658,8 +717,7 @@ fun compile(
           for param in lambda.params do param_types.&.push(param.type)
           param_types.to_slice()
         },
-        return_type = compiler.context.yogurt.funs.get(function)
-          .return_type().put_on_heap(),
+        return_type = compiler.parent.get(function).return_type().put_on_heap(),
       })
       var is_comptime = false
       | for capture in captured do
@@ -744,7 +802,7 @@ fun compile(
       for arg in args do arg_types.&.push(builder.get(arg).type)
       var arg_types = arg_types.to_slice()
 
-      var result = compiler.context.egg.lookup(name.string, arg_types) or(error)
+      var fun_ = compiler.parent.egg.lookup(name.string, arg_types) or(error)
         return error[YogurtId, Error](error(error, name.src))
 
       var are_all_args_comptime = true
@@ -759,9 +817,7 @@ fun compile(
         for arg in args do arg_values.&.push(builder.get(arg).op.comptime.unwrap())
         var arg_values = arg_values.to_slice()
 
-        var result = result.fun_.run(
-          arg_values, result.substitutions, name.string, compiler.context
-        )
+        var result = fun_.run(arg_values, compiler.parent)
         switch result
         case returns(value) builder.push(value.to_expr())
         case runtime_crash(crash) {
@@ -774,15 +830,10 @@ fun compile(
         case comptime_error(message)
           return error[YogurtId, Error](error(message, name.src))
       } else {
-        result.fun_.compile(
-          result.substitutions, name.string, compiler.context
-        )?
-        var type = result.fun_.return_type.specialize(result.substitutions)
-
         builder.push(
           YogurtOp.call(YogurtCall {
-            function = yogurt_signature(name.string, arg_types), args
-          }) $ type
+            function = fun_.compile(compiler.parent)?, args
+          }) $ fun_.return_type()
         )
       }
     }
@@ -883,7 +934,7 @@ fun get(body: YogurtBodyBuilder, id: YogurtId): YogurtExpr {
   body.parent.get(id)
 }
 fun compile(
-  builtin: Builtin, param_types: Slice[PlumType], context: &Context,
+  builtin: Builtin, param_types: Slice[PlumType], context: &YogurtCompiler,
 ): Result[YogurtFun, Error] {
   var signature = yogurt_signature("builtin_{builtin}", param_types)
 
@@ -1002,21 +1053,21 @@ fun compile(
   )
 }
 fun compile_cast_fun(
-  from: PlumType, to: PlumType, context: &Context
+  from: PlumType, to: PlumType, compiler: &YogurtCompiler
 ): YogurtSignature {
   var signature = yogurt_signature("cast {from} to {to}", empty_slice[PlumType]())
 
-  if context.yogurt.funs.contains(signature) or context.is_on_stack(signature.str)
+  if compiler.is_defined(signature) or compiler.is_currently_compiling(signature)
   then
     return signature
-  context.push_to_stack(signature.str)
+  compiler.start_compiling(signature)
 
   var fun_builder = yogurt_fun_builder()
   var body = YogurtBodyBuilder {
     parent = fun_builder.&, body = list[YogurtId]()
   }
   var param = body.parent.&.push(YogurtOp.param $ from)
-  var returns = compile_cast_fun_body(from, to, body.&, param, context)
+  var returns = compile_cast_fun_body(from, to, body.&, param, compiler)
   var fun_ = YogurtFun {
     exprs = fun_builder.exprs.to_slice(),
     captures = none[Slice[YogurtId]](),
@@ -1027,13 +1078,13 @@ fun compile_cast_fun(
     }
   }
 
-  context.yogurt.funs.&.put(signature, fun_)
-  context.pop_from_stack()
+  compiler.define(signature, fun_)
+  compiler.done_compiling()
   signature
 }
 fun compile_cast_fun_body(
   from: PlumType, to: PlumType,
-  builder: &YogurtBodyBuilder, param: YogurtId, context: &Context
+  builder: &YogurtBodyBuilder, param: YogurtId, compiler: &YogurtCompiler
 ): YogurtId {
   if from is never then
     return builder.push(YogurtOp.uninitialized $ to)
@@ -1052,7 +1103,7 @@ fun compile_cast_fun_body(
         of = param, name
       }) $ from_field_type)
       var cast_id = builder.&.push(YogurtOp.call(YogurtCall {
-        function = compile_cast_fun(from_field_type, to_field_type, context),
+        function = compile_cast_fun(from_field_type, to_field_type, compiler),
         args = list(original_id).to_slice(),
       }) $ to_field_type)
 
@@ -1082,7 +1133,7 @@ fun compile_cast_fun_body(
         var from_payload_id = both.b
 
         to_payloads_ids.&.push(case_builder.&.push(YogurtOp.call(YogurtCall {
-          function = compile_cast_fun(from_payload_type, to_payload_type, context),
+          function = compile_cast_fun(from_payload_type, to_payload_type, compiler),
           args = list(from_payload_id).to_slice(),
         }) $ to_payload_type))
       }
