@@ -101,16 +101,6 @@ fun yogurt_value_list(items: Slice[YogurtValue], item_type: PlumType): YogurtVal
   ) $ type_list(item_type)
 }
 
-var yogurt_fun_placeholder = YogurtFun {
-  exprs = empty_slice[YogurtExpr](),
-  captures = none[Slice[YogurtId]](),
-  body = YogurtBody {
-    params = empty_slice[YogurtId](),
-    exprs = empty_slice[YogurtId](),
-    returns = YogurtId { int = -1 },
-  }
-}
-
 fun get(fun_: YogurtFun, id: YogurtId): YogurtExpr { fun_.exprs.get(id.int) }
 
 fun ==(a: YogurtId, b: YogurtId): Bool { a.int == b.int }
@@ -120,6 +110,12 @@ fun yogurt_signature(name: String, params: Slice[PlumType]): YogurtSignature {
   var b = string_builder().&
   b."{name}"
   for param in params do b." {param}"
+  YogurtSignature { str = b.to_string() }
+}
+fun yogurt_signature(name: String, args: Slice[YogurtValue]): YogurtSignature {
+  var b = string_builder().&
+  b."{name}"
+  for arg in args do b." {arg}"
   YogurtSignature { str = b.to_string() }
 }
 fun ==(a: YogurtSignature, b: YogurtSignature): Bool { a.str == b.str }
